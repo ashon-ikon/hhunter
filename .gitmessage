@@ -1,0 +1,46 @@
+<section>: <brief description under 50 chars>
+
+<Paragraph explaining the "why" - what problem this solves and context>
+<keep line lengths between 80 and 120 characters>
+
+📦 <Subsection 1: Logical grouping of related changes>
+- <Specific change with technical detail>
+- <Another related change>
+- <Include file paths or component names when relevant>
+
+🔧 <Subsection 2: Another logical grouping>
+- <Change description>
+- <Technical implementation detail>
+- <Impact or reason for the change>
+
+🚀 <Subsection 3: Feature additions or enhancements>
+- <New functionality added>
+- <User-facing changes>
+
+📚 <Subsection 4: Documentation updates>
+- <New docs added>
+- <Updated documentation>
+
+🧪 Testing & Verification
+- <Test description> (result: successful/failed)
+- <What was verified manually or automatically>
+- <Errors resolved or regressions checked>
+
+📎 Notes
+<Free-form notes about implementation decisions, technical context,
+known limitations, follow-up work needed, or references to issues/docs>
+
+<Optional footer tags:>
+Tested-by: <method or person>
+Fixes: #<issue number>
+See-also: <related commit or doc>
+Follow-up: <what needs to happen next>
+
+---
+EMOJI GUIDE (use as appropriate for your commit):
+📦 Core/Package changes    🔧 Build/Config/Infra    🚀 Features/API
+📚 Documentation           🧪 Testing               🐛 Bug fixes
+🔒 Security               ♻️  Refactoring           ⚡ Performance
+💄 UI/Style               🌐 i18n/Localization     📱 Responsive
+🗃️  Database              🔀 Merge/Branch          ⬆️  Dependencies
+🔥 Remove code            ✨ New feature           🎨 Code structure

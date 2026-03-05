@@ -1,0 +1,40 @@
+[project]
+name = "house-hunter"
+version = "0.1.0"
+description = "Houston real estate data aggregation and spread analysis tool"
+readme = "README.md"
+requires-python = ">=3.11"
+license = {text = "MIT"}
+dependencies = [
+    "pandas>=2.0",
+    "python-dateutil>=2.9",
+    "requests>=2.31",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.1",
+]
+
+[project.scripts]
+init-snapshot = "src.init_snapshot:main"
+extract-har = "src.extract_har:main"
+normalize = "src.normalize_har:main"
+qa = "src.qa:main"
+analyze = "src.analyze_spreads:main"
+pipeline = "src.pipeline:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W"]
