@@ -23,7 +23,9 @@ extract-har = "src.extract_har:main"
 normalize = "src.normalize_har:main"
 qa = "src.qa:main"
 analyze = "src.analyze_spreads:main"
+grid-analysis = "src.grid_analysis:main"
 pipeline = "src.pipeline:main"
+visualize = "src.visualize:main"
 
 [build-system]
 requires = ["hatchling"]

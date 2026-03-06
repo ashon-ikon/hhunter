@@ -5,8 +5,12 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
+from typing import Any
+from urllib.parse import urljoin, urlparse
 
 import pandas as pd
+
+from src.grid_utils import DEFAULT_CELL_SIZE_M, assign_grid_fields, grid_spec_for_listings
 
 CANONICAL_COLUMNS = [
     "source",
@@ -41,12 +45,23 @@ CANONICAL_COLUMNS = [
     "era_bucket",
     "size_bucket",
     "flip_box_flag",
+    "grid_id",
+    "grid_row",
+    "grid_col",
+    "grid_centroid_lat",
+    "grid_centroid_lng",
     "flood_flag",
     "har_file",
     "request_url",
     "request_timestamp",
     "request_params",
 ]
+
+DATASET_FILE_NAMES = {
+    "active": "active",
+    "sold": "sold",
+    "rental": "rentals",
+}
 
 
 def parse_num(value: object) -> float | None:
@@ -95,6 +110,28 @@ def size_bucket(sqft: float | None) -> str | None:
     if sqft < 2600:
         return "1800_2600"
     return "2600_plus"
+
+
+def canonical_listing_url(raw: dict, source: str) -> str | None:
+    candidate = pick(raw, "URL", "url", "detailUrl", "hdpUrl", "WEB_URL", "PROPERTY_URL")
+    if not isinstance(candidate, str) or not candidate.strip():
+        return None
+
+    candidate = candidate.strip()
+    if candidate.startswith("http://") or candidate.startswith("https://"):
+        return candidate
+
+    request_url = raw.get("__request_url")
+    if isinstance(request_url, str) and request_url.strip():
+        parsed = urlparse(request_url)
+        if parsed.scheme and parsed.netloc:
+            return urljoin(f"{parsed.scheme}://{parsed.netloc}", candidate)
+
+    if source == "har":
+        return urljoin("https://www.har.com", candidate)
+    if source == "zillow":
+        return urljoin("https://www.zillow.com", candidate)
+    return candidate
 
 
 def normalize_record(raw: dict) -> dict:
@@ -185,13 +222,18 @@ def normalize_record(raw: dict) -> dict:
         "subdivision": subdivision,
         "new_construction_flag": new_construction,
         "vendor_ppsf": vendor_ppsf,
-        "url": pick(raw, "URL", "url", "detailUrl", "hdpUrl"),
+        "url": canonical_listing_url(raw, source),
         "street_name": street_name,
         "calc_ppsf_list": calc_ppsf_list,
         "calc_ppsf_sold": calc_ppsf_sold,
         "era_bucket": e_bucket,
         "size_bucket": s_bucket,
         "flip_box_flag": flip_flag,
+        "grid_id": None,
+        "grid_row": None,
+        "grid_col": None,
+        "grid_centroid_lat": None,
+        "grid_centroid_lng": None,
         "flood_flag": None,
         "har_file": raw.get("__har_file"),
         "request_url": raw.get("__request_url"),
@@ -220,6 +262,80 @@ def write_dataset(df: pd.DataFrame, out_dir: Path, name: str) -> Path:
     return out_path
 
 
+def as_text(value: object) -> str | None:
+    if value is None or pd.isna(value):
+        return None
+    text = str(value).strip()
+    if not text or text.lower() in {"nan", "none", "null"}:
+        return None
+    return text
+
+
+def dedupe_key(row: pd.Series) -> str:
+    listing_id = as_text(row.get("listing_id"))
+    if listing_id:
+        return f"listing_id:{listing_id}"
+
+    mlsnum = as_text(row.get("mlsnum"))
+    if mlsnum:
+        return f"mlsnum:{mlsnum}"
+
+    address = as_text(row.get("address"))
+    zip_code = as_text(row.get("zip"))
+    sqft = as_text(row.get("sqft"))
+    year_built = as_text(row.get("year_built"))
+    parts = [address, zip_code, sqft, year_built]
+    if any(parts):
+        normalized = [part or "" for part in parts]
+        return "address_zip_sqft_year:" + "|".join(normalized)
+
+    return f"row:{int(row.get('_row_order', 0))}"
+
+
+def dataset_stats(df: pd.DataFrame) -> dict[str, Any]:
+    if df.empty:
+        return {
+            "rows": 0,
+            "unique_listing_ids": 0,
+        }
+
+    return {
+        "rows": int(len(df)),
+        "unique_listing_ids": int(df["listing_id"].nunique(dropna=True)) if "listing_id" in df.columns else 0,
+    }
+
+
+def dedupe_dataset(df: pd.DataFrame) -> tuple[pd.DataFrame, dict[str, Any]]:
+    if df.empty:
+        return df.copy(), {"raw_rows": 0, "deduped_rows": 0, "duplicate_rows_removed": 0}
+
+    work = df.copy()
+    work["_row_order"] = range(len(work))
+    work["_request_timestamp_dt"] = pd.to_datetime(work["request_timestamp"], errors="coerce", utc=True)
+    work["_non_null_fields"] = work[CANONICAL_COLUMNS].notna().sum(axis=1)
+    work["_dedupe_key"] = work.apply(dedupe_key, axis=1)
+
+    deduped = (
+        work.sort_values(
+            by=["_dedupe_key", "_request_timestamp_dt", "_non_null_fields", "_row_order"],
+            ascending=[True, False, False, True],
+            na_position="last",
+        )
+        .drop_duplicates(subset=["_dedupe_key"], keep="first")
+        .sort_values("_row_order")
+        .drop(columns=["_row_order", "_request_timestamp_dt", "_non_null_fields", "_dedupe_key"])
+        .reindex(columns=CANONICAL_COLUMNS)
+    )
+
+    raw_rows = int(len(df))
+    deduped_rows = int(len(deduped))
+    return deduped, {
+        "raw_rows": raw_rows,
+        "deduped_rows": deduped_rows,
+        "duplicate_rows_removed": raw_rows - deduped_rows,
+    }
+
+
 def normalize_snapshot(snapshot: Path) -> dict:
     listings_path = snapshot / "out" / "extracted" / "listings_raw.json"
     if not listings_path.exists():
@@ -229,40 +345,54 @@ def normalize_snapshot(snapshot: Path) -> dict:
     rows = [normalize_record(item) for item in raw_listings if isinstance(item, dict)]
     df = pd.DataFrame(rows)
     df = df.reindex(columns=CANONICAL_COLUMNS)
+    if not df.empty and df["lat"].notna().any() and df["lng"].notna().any():
+        spec = grid_spec_for_listings(df, cell_size_m=DEFAULT_CELL_SIZE_M)
+        df = assign_grid_fields(df, spec)
 
     out_dir = snapshot / "out" / "normalized"
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    active = df[df["dataset"] == "active"].copy()
-    sold = df[df["dataset"] == "sold"].copy()
-    rentals = df[df["dataset"] == "rental"].copy()
-
-    active_out = write_dataset(active, out_dir, "active")
-    sold_out = write_dataset(sold, out_dir, "sold")
-    rentals_out = write_dataset(rentals, out_dir, "rentals")
-
-    qa_stub = {
-        "snapshot_id": snapshot.name,
-        "row_counts": {
-            "active": int(len(active)),
-            "sold": int(len(sold)),
-            "rental": int(len(rentals)),
-        },
-        "missingness": {
-            "sqft": float(df["sqft"].isna().mean()) if not df.empty else 1.0,
-            "year_built": float(df["year_built"].isna().mean()) if not df.empty else 1.0,
-            "list_price_num": float(df["list_price_num"].isna().mean()) if not df.empty else 1.0,
-            "sold_price_num": float(df["sold_price_num"].isna().mean()) if not df.empty else 1.0,
-        },
+    raw_datasets = {
+        "active": df[df["dataset"] == "active"].copy(),
+        "sold": df[df["dataset"] == "sold"].copy(),
+        "rental": df[df["dataset"] == "rental"].copy(),
     }
-    (out_dir / "qa_report.json").write_text(json.dumps(qa_stub, indent=2), encoding="utf-8")
+
+    deduped_datasets: dict[str, pd.DataFrame] = {}
+    dataset_reports: dict[str, dict[str, Any]] = {}
+    raw_outputs: dict[str, Path] = {}
+    deduped_outputs: dict[str, Path] = {}
+
+    for dataset_name, raw_dataset in raw_datasets.items():
+        file_name = DATASET_FILE_NAMES[dataset_name]
+        raw_outputs[dataset_name] = write_dataset(raw_dataset, out_dir, f"{file_name}_raw")
+
+        deduped_dataset, dedupe_report = dedupe_dataset(raw_dataset)
+        deduped_datasets[dataset_name] = deduped_dataset
+        deduped_outputs[dataset_name] = write_dataset(deduped_dataset, out_dir, file_name)
+        dataset_reports[dataset_name] = {
+            **dedupe_report,
+            "raw": dataset_stats(raw_dataset),
+            "deduped": dataset_stats(deduped_dataset),
+        }
+
+    normalize_report = {
+        "snapshot_id": snapshot.name,
+        "normalized_rows": int(len(df)),
+        "datasets": dataset_reports,
+    }
+    normalize_report_path = out_dir / "normalize_report.json"
+    normalize_report_path.write_text(json.dumps(normalize_report, indent=2), encoding="utf-8")
     return {
         "snapshot": snapshot,
         "normalized_rows": len(df),
-        "active_out": active_out,
-        "sold_out": sold_out,
-        "rentals_out": rentals_out,
-        "qa_stub_out": out_dir / "qa_report.json",
+        "active_out": deduped_outputs["active"],
+        "sold_out": deduped_outputs["sold"],
+        "rentals_out": deduped_outputs["rental"],
+        "active_raw_out": raw_outputs["active"],
+        "sold_raw_out": raw_outputs["sold"],
+        "rentals_raw_out": raw_outputs["rental"],
+        "normalize_report_out": normalize_report_path,
     }
 
 
@@ -279,7 +409,7 @@ def main() -> None:
     print(f"Wrote: {result['active_out']}")
     print(f"Wrote: {result['sold_out']}")
     print(f"Wrote: {result['rentals_out']}")
-    print(f"Wrote: {result['qa_stub_out']}")
+    print(f"Wrote: {result['normalize_report_out']}")
 
 
 if __name__ == "__main__":
