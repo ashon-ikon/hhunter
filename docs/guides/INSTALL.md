@@ -59,6 +59,7 @@ normalize --help
 qa --help
 analyze --help
 pipeline --help
+extract-har --help
 ```
 
 You should see help text for both commands.

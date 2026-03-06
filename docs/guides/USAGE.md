@@ -60,16 +60,20 @@ pipeline --replay-failures --snapshot snapshots/<snapshot_id>
 **Import the HAR file:**
 
 ```bash
-python -m src.extract_har ~/Documents/HAR_Export.har
+init-snapshot --label "Acres Homes 77091"
+extract-har --snapshot snapshots/<snapshot_id> ~/Documents/HAR_Export.har
 ```
 
 **Output:**
 ```
-Processing HAR file: /Users/me/Documents/HAR_Export.har
-  Extracted: data/raw/searchlistings_20260305_120000_0.json
-  Extracted: data/raw/searchlistings_20260305_120001_2.json
-
-Processed 2 file(s) -> data/raw/
+Snapshot: 2026-03-05_acres_homes_77091
+HAR files processed: 1 / 1
+Indexed requests: 160
+Extracted payloads: 1
+Merged listings: 100
+Wrote: snapshots/2026-03-05_acres_homes_77091/out/extracted/har_responses.ndjson
+Wrote: snapshots/2026-03-05_acres_homes_77091/out/extracted/requests_index.csv
+Wrote: snapshots/2026-03-05_acres_homes_77091/out/extracted/listings_raw.json
 ```
 
 **What if the HAR is truncated?** (1MB response limit)
@@ -77,8 +81,11 @@ Processed 2 file(s) -> data/raw/
 The HAR file may only contain part of the API response. Use direct fetching instead:
 
 ```bash
-python -m src.fetch_searchlistings --har ~/Documents/HAR_Export.har --zip 77088 \
-  --output data/raw/sales_77088_full.json
+python -m src.fetch_searchlistings \
+  --snapshot snapshots/<snapshot_id> \
+  --har ~/Documents/HAR_Export.har \
+  --zip 77088 \
+  --for-sale 1
 ```
 
 ### 1.2 From JSON Files
@@ -87,10 +94,10 @@ If you have previously exported JSON files:
 
 ```bash
 # Single file
-python -m src.extract_har ~/Documents/data.json
+extract-har --snapshot snapshots/<snapshot_id> ~/Documents/data.json
 
 # Directory (all JSON files)
-python -m src.extract_har ~/Documents/MyData/
+extract-har --snapshot snapshots/<snapshot_id> ~/Documents/MyData/
 ```
 
 **Supported formats:**
@@ -106,9 +113,10 @@ Once you have a HAR file with auth cookies:
 ```bash
 # Fetch specific ZIP code
 python -m src.fetch_searchlistings \
+  --snapshot snapshots/<snapshot_id> \
   --har ~/Documents/HAR_Export.har \
   --zip 77088 \
-  --output data/raw/sales_77088.json
+  --for-sale 1
 ```
 
 **Custom API URL:**
@@ -116,17 +124,19 @@ python -m src.fetch_searchlistings \
 ```bash
 # For rentals (for_sale=0)
 python -m src.fetch_searchlistings \
+  --snapshot snapshots/<snapshot_id> \
   --url "https://www.har.com/api/SearchListings?zip_code=77088&for_sale=0&bedroom_min=2" \
-  --output data/raw/rentals_77088.json
+  --for-sale 0
 ```
 
 **Change ZIP code on the fly:**
 
 ```bash
 python -m src.fetch_searchlistings \
+  --snapshot snapshots/<snapshot_id> \
   --har ~/Documents/HAR_Export.har \
   --zip 77018 \  # Override ZIP in HAR file
-  --output data/raw/sales_77018.json
+  --for-sale 1
 ```
 
 ---
@@ -135,41 +145,45 @@ python -m src.fetch_searchlistings \
 
 ### 2.1 Normalize All Files
 
-Convert raw JSON to clean CSV tables:
+Convert extracted listings in a snapshot pack to clean canonical CSV tables:
 
 ```bash
-python -m src.normalize_har
+normalize --snapshot snapshots/<snapshot_id>
 ```
 
 **What it does:**
-1. Finds newest JSON in `data/raw/`
-2. Parses JSON (handles JSONC comments)
-3. Coerces numeric fields (handles errors gracefully)
-4. Normalizes ZIP codes to 5 digits
-5. Splits into `active` and `sold` CSVs
+1. Loads `out/extracted/listings_raw.json` from the snapshot
+2. Coerces numeric fields and canonicalizes listing URLs
+3. Adds derived segment fields such as `era_bucket`, `size_bucket`, and `flip_box_flag`
+4. Adds default 400m grid assignment fields
+5. Writes deduped `active.csv`, `sold.csv`, `rentals.csv`, plus raw variants and a normalize report
 
 **Output:**
 ```
-Processing: data/raw/sales_77088.json
-Output:
-  Active: data/processed/sales_77088_active.csv
-  Sold:   data/processed/sales_77088_sold.csv
+Snapshot: snapshots/<snapshot_id>
+Normalized rows: 100
+Wrote: snapshots/<snapshot_id>/out/normalized/active.csv
+Wrote: snapshots/<snapshot_id>/out/normalized/sold.csv
+Wrote: snapshots/<snapshot_id>/out/normalized/rentals.csv
+Wrote: snapshots/<snapshot_id>/out/normalized/normalize_report.json
 ```
 
 ### 2.2 Normalize Specific File
 
 ```bash
-python -m src.normalize_har data/raw/rentals_77088.json
+normalize --snapshot snapshots/<snapshot_id>
 ```
+
+`normalize` operates on extracted snapshot artifacts rather than directly on ad hoc raw files.
 
 ### 2.3 Check Output
 
 ```bash
-# List processed files
-ls -lh data/processed/
+# List normalized snapshot outputs
+ls -lh snapshots/<snapshot_id>/out/normalized/
 
 # Preview CSV (first 10 rows, specific columns)
-head -20 data/processed/sales_77088_active.csv | cut -d',' -f1-10
+head -20 snapshots/<snapshot_id>/out/normalized/active.csv | cut -d',' -f1-10
 ```
 
 ---
@@ -267,10 +281,11 @@ visualize --path snapshots/<snapshot_id>/out/qa/qa_report.json
 
 ### 3.1 Submarket Scoreboard
 
-**Market metrics by ZIP code**
+**Market metrics by ZIP / segment**
 
 ```bash
-python -m src.analyze_spreads --scoreboard
+analyze --snapshot snapshots/<snapshot_id>
+visualize --snapshot snapshots/<snapshot_id> --artifact scoreboard
 ```
 
 **Output:**
@@ -283,7 +298,7 @@ Loaded 120 active listings, 120 sold listings
 77018        21.0             297.0             46.0            27               306.0       9.0
 77088        18.0             143.0             59.0            13               184.0      41.0
 
-Saved: data/processed/scoreboard_zip.csv
+Saved: snapshots/<snapshot_id>/out/analysis/scoreboard_segments.csv
 ```
 
 **Interpretation:**
@@ -335,7 +350,7 @@ python -m src.analyze_spreads --rank --top 20
 python << 'EOF'
 import pandas as pd
 
-df = pd.read_csv('data/processed/ranked_by_spread.csv')
+df = pd.read_csv('snapshots/<snapshot_id>/out/analysis/ranked_candidates.csv')
 
 # Filter
 filtered = df[
@@ -363,7 +378,7 @@ python -m src.analyze_spreads --mlsnum 75866936
 75866936  1117 W 17th St 77008  Single-Family      3.0        189.0                256.0         -67.0
 
 Cohort size: 7 comps
-Saved cohort: data/processed/cohort_75866936.csv
+Saved ranked outputs under: snapshots/<snapshot_id>/out/analysis/
 ```
 
 **Find MLSNUM:**
@@ -377,7 +392,7 @@ Saved cohort: data/processed/cohort_75866936.csv
 
 **View the comps:**
 ```bash
-cat data/processed/cohort_75866936.csv
+visualize --snapshot snapshots/<snapshot_id> --artifact ranked --limit 20
 ```
 
 **Use cases:**
@@ -394,20 +409,25 @@ cat data/processed/cohort_75866936.csv
 **Fetch and analyze multiple ZIPs**
 
 ```bash
-# Fetch sales for 4 ZIPs
+# Create a snapshot pack for this scouting run
+init-snapshot --label "Multi ZIP scout"
+
+# Fetch sales for 4 ZIPs into the same snapshot
 for zip in 77008 77018 77088 77091; do
   echo "Fetching ZIP $zip..."
   python -m src.fetch_searchlistings \
+    --snapshot snapshots/<snapshot_id> \
     --har ~/Documents/HAR_Export.har \
     --zip $zip \
-    --output data/raw/sales_${zip}.json
+    --for-sale 1
 done
 
-# Normalize all
-python -m src.normalize_har
+# Extract/normalize/analyze the snapshot artifacts
+normalize --snapshot snapshots/<snapshot_id>
 
 # Compare markets
-python -m src.analyze_spreads --scoreboard
+analyze --snapshot snapshots/<snapshot_id>
+visualize --snapshot snapshots/<snapshot_id> --artifact scoreboard
 ```
 
 ### 4.2 Rental Analysis
@@ -417,23 +437,25 @@ python -m src.analyze_spreads --scoreboard
 ```bash
 # Fetch sales
 python -m src.fetch_searchlistings \
+  --snapshot snapshots/<snapshot_id> \
   --url "https://www.har.com/api/SearchListings?zip_code=77088&for_sale=1" \
-  --output data/raw/sales_77088.json
+  --for-sale 1
 
 # Fetch rentals (for_sale=0)
 python -m src.fetch_searchlistings \
+  --snapshot snapshots/<snapshot_id> \
   --url "https://www.har.com/api/SearchListings?zip_code=77088&for_sale=0&bedroom_min=2" \
-  --output data/raw/rentals_77088.json
+  --for-sale 0
 
 # Normalize both
-python -m src.normalize_har
+normalize --snapshot snapshots/<snapshot_id>
 
 # Manually compute metrics (in Python)
 python << 'EOF'
 import pandas as pd
 
-sales = pd.read_csv('data/processed/sales_77088_active.csv')
-rentals = pd.read_csv('data/processed/rentals_77088_active.csv')
+sales = pd.read_csv('snapshots/<snapshot_id>/out/normalized/active.csv')
+rentals = pd.read_csv('snapshots/<snapshot_id>/out/normalized/rentals.csv')
 
 # Single-family homes
 sf_sales = sales[sales['PROPTYPENAME'] == 'Single-Family']
@@ -461,8 +483,8 @@ EOF
 import pandas as pd
 
 # Load data
-active = pd.read_csv('data/processed/sales_77088_active.csv')
-ranked = pd.read_csv('data/processed/ranked_by_spread.csv')
+active = pd.read_csv('snapshots/<snapshot_id>/out/normalized/active.csv')
+ranked = pd.read_csv('snapshots/<snapshot_id>/out/analysis/ranked_candidates.csv')
 
 # Your deal criteria
 MY_CRITERIA = {
@@ -502,15 +524,15 @@ python custom_analysis.py
 
 ```bash
 # Get best 50 deals
-python -m src.analyze_spreads --rank --top 50
+analyze --snapshot snapshots/<snapshot_id>
 
 # Now you have:
-# - data/processed/ranked_by_spread.csv (main table)
-# - data/processed/scoreboard_zip.csv (market metrics)
-# - data/processed/cohort_<MLSNUM>.csv (comp sets)
+# - snapshots/<snapshot_id>/out/analysis/ranked_candidates.csv (main table)
+# - snapshots/<snapshot_id>/out/analysis/scoreboard_segments.csv (market metrics)
+# - snapshots/<snapshot_id>/out/analysis/streets_top.csv (street worksheet)
 
 # Open in Excel
-open data/processed/ranked_by_spread.csv
+open snapshots/<snapshot_id>/out/analysis/ranked_candidates.csv
 ```
 
 ---
@@ -566,7 +588,7 @@ cohort = build_cohort(
 **Solution**:
 ```bash
 # Check encoding
-file data/processed/sales_77088_active.csv
+file snapshots/<snapshot_id>/out/normalized/active.csv
 
 # Re-encode if needed
 iconv -f UTF-8 -t ASCII//TRANSLIT -o fixed.csv original.csv
@@ -602,16 +624,19 @@ iconv -f UTF-8 -t ASCII//TRANSLIT -o fixed.csv original.csv
 
 ```bash
 # 1. Fetch data for target area
+init-snapshot --label "Flip scout 77008"
 python -m src.fetch_searchlistings \
+  --snapshot snapshots/<snapshot_id> \
   --har ~/Documents/HAR.har \
   --zip 77008 \
-  --output data/raw/sales_77008.json
+  --for-sale 1
 
 # 2. Normalize
-python -m src.normalize_har
+normalize --snapshot snapshots/<snapshot_id>
 
 # 3. Get top deals
-python -m src.analyze_spreads --rank --top 30
+analyze --snapshot snapshots/<snapshot_id>
+visualize --snapshot snapshots/<snapshot_id> --artifact ranked --limit 30
 
 # 4. Filter manually
 # - Look for: PPSF_SPREAD < -$25, BLDGSQFT > 1500, DOM < 60
@@ -619,7 +644,7 @@ python -m src.analyze_spreads --rank --top 30
 # - Check neighborhood safety, school ratings, flood zone
 
 # 5. Export to Excel for team review
-cp data/processed/ranked_by_spread.csv flip_deals_77008.csv
+cp snapshots/<snapshot_id>/out/analysis/ranked_candidates.csv flip_deals_77008.csv
 ```
 
 ### Workflow B: Build Investor Portfolio
@@ -627,25 +652,29 @@ cp data/processed/ranked_by_spread.csv flip_deals_77008.csv
 **Goal**: Compare rental yields across multiple ZIPs
 
 ```bash
-# 1. Fetch sales + rentals for 5 ZIPs
+# 1. Create a snapshot pack and fetch sales + rentals for 5 ZIPs
+init-snapshot --label "Investor portfolio scout"
 for zip in 77008 77018 77055 77088 77091; do
   # Sales
   python -m src.fetch_searchlistings \
+    --snapshot snapshots/<snapshot_id> \
     --har ~/HAR.har \
     --zip $zip \
-    --output data/raw/sales_${zip}.json
+    --for-sale 1
 
   # Rentals
   python -m src.fetch_searchlistings \
+    --snapshot snapshots/<snapshot_id> \
     --url "https://www.har.com/api/SearchListings?zip_code=${zip}&for_sale=0&bedroom_min=2" \
-    --output data/raw/rentals_${zip}.json
+    --for-sale 0
 done
 
 # 2. Normalize all
-python -m src.normalize_har
+normalize --snapshot snapshots/<snapshot_id>
 
 # 3. Generate scoreboard
-python -m src.analyze_spreads --scoreboard
+analyze --snapshot snapshots/<snapshot_id>
+visualize --snapshot snapshots/<snapshot_id> --artifact scoreboard
 
 # 4. Analyze cap rates (manual Python)
 # (See Advanced Usage 4.2 above)
@@ -659,13 +688,14 @@ python -m src.analyze_spreads --scoreboard
 
 ```bash
 # 1. Have HAR data processed (from previous imports)
-python -m src.normalize_har  # (if not already done)
+normalize --snapshot snapshots/<snapshot_id>  # (if not already done)
 
 # 2. Analyze your subject property
-python -m src.analyze_spreads --mlsnum 75866936
+analyze --snapshot snapshots/<snapshot_id>
+visualize --snapshot snapshots/<snapshot_id> --artifact ranked --limit 20
 
 # 3. Review comps
-cat data/processed/cohort_75866936.csv
+visualize --snapshot snapshots/<snapshot_id> --artifact ranked --limit 20
 
 # 4. Manual steps
 # - Verify cohort makes sense (same neighborhood, similar condition)
@@ -685,18 +715,19 @@ source .venv/bin/activate
 pip install -e .
 
 # Regular workflow
-python -m src.extract_har HAR_Export.har              # OR
-python -m src.fetch_searchlistings --har HAR.har --zip 77088
+init-snapshot --label "Acres Homes 77091"
+extract-har --snapshot snapshots/<snapshot_id> HAR_Export.har  # OR
+python -m src.fetch_searchlistings --snapshot snapshots/<snapshot_id> --har HAR.har --zip 77088 --for-sale 1
 
-python -m src.normalize_har
+normalize --snapshot snapshots/<snapshot_id>
 
-python -m src.analyze_spreads --scoreboard
-python -m src.analyze_spreads --rank --top 20
-python -m src.analyze_spreads --mlsnum 12345
+analyze --snapshot snapshots/<snapshot_id>
+visualize --snapshot snapshots/<snapshot_id> --artifact scoreboard
+visualize --snapshot snapshots/<snapshot_id> --artifact ranked --limit 20
 
 # View results
-ls -lh data/processed/                    # List output files
-head data/processed/*.csv                 # Preview CSVs
+ls -lh snapshots/<snapshot_id>/out/analysis/        # List output files
+head snapshots/<snapshot_id>/out/normalized/*.csv   # Preview normalized CSVs
 ```
 
 ---
