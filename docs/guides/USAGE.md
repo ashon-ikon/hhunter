@@ -10,6 +10,7 @@ init-snapshot --label "Acres Homes 77091"
 
 # Extract HAR payloads into snapshot outputs
 extract-har --snapshot snapshots/<snapshot_id> snapshots/<snapshot_id>/raw/har
+extract-har --replay-failures --snapshot snapshots/<snapshot_id> snapshots/<snapshot_id>/raw/har
 
 # Normalize to canonical tables
 normalize --snapshot snapshots/<snapshot_id>
@@ -20,8 +21,20 @@ qa --snapshot snapshots/<snapshot_id>
 # Analyze candidates + segments + streets
 analyze --snapshot snapshots/<snapshot_id>
 
-# One-shot run (extract -> normalize -> qa -> analyze)
+# Visualize snapshot artifacts in the terminal
+visualize --snapshot snapshots/<snapshot_id> --artifact ranked
+visualize --snapshot snapshots/<snapshot_id> --artifact ranked --artifact qa
+visualize --snapshot snapshots/<snapshot_id> --all --limit 30
+visualize --snapshot snapshots/<snapshot_id> --artifact qa
+visualize --snapshot snapshots/<snapshot_id> --artifact grid_scoreboard
+
+# Grid-based scouting outputs
+grid-analysis --snapshot snapshots/<snapshot_id>
+grid-analysis --snapshot snapshots/<snapshot_id> --cell-size-m 400 --export-geojson
+
+# One-shot run (extract -> normalize -> qa -> analyze -> grid)
 pipeline --snapshot snapshots/<snapshot_id>
+pipeline --replay-failures --snapshot snapshots/<snapshot_id>
 ```
 
 ---
@@ -162,6 +175,95 @@ head -20 data/processed/sales_77088_active.csv | cut -d',' -f1-10
 ---
 
 ## 3. Analysis & Reporting
+
+### 3.0 Visualize Artifacts
+
+Use `visualize` to inspect snapshot outputs in the terminal without opening CSV or JSON files manually.
+
+**Basic usage:**
+
+```bash
+visualize --snapshot snapshots/<snapshot_id> --artifact ranked
+visualize --snapshot snapshots/<snapshot_id> --artifact ranked --artifact qa
+visualize --snapshot snapshots/<snapshot_id> --all --limit 30
+```
+
+If `--snapshot` is omitted, `visualize` uses the most recently modified snapshot directory.
+When `--all` is used, `visualize` renders each available named artifact for the snapshot one after the other and skips any artifact file that does not exist yet.
+
+**Supported artifacts:**
+- `ranked` → `out/analysis/ranked_candidates.csv`
+- `scoreboard` → `out/analysis/scoreboard_segments.csv`
+- `streets` → `out/analysis/streets_top.csv`
+- `grid_scoreboard` → `out/analysis/grid_scoreboard.csv`
+- `grid_candidates` → `out/analysis/grid_candidates.csv`
+- `grid_streets` → `out/analysis/grid_streets.csv`
+- `active` → `out/normalized/active.csv`
+- `sold` → `out/normalized/sold.csv`
+- `rentals` → `out/normalized/rentals.csv`
+- `requests` → `out/extracted/requests_index.csv`
+- `qa` → `out/qa/qa_report.json`
+- `normalize` → `out/normalized/normalize_report.json`
+
+**Common operator workflows:**
+
+```bash
+# Review ranked candidates
+visualize --snapshot snapshots/<snapshot_id> --artifact ranked --limit 15
+
+# Review segment scoreboard
+visualize --snapshot snapshots/<snapshot_id> --artifact scoreboard --limit 20
+
+# Review QA summary before analysis
+visualize --snapshot snapshots/<snapshot_id> --artifact qa
+
+# Inspect grid scouting output
+visualize --snapshot snapshots/<snapshot_id> --artifact grid_scoreboard --limit 20
+visualize --snapshot snapshots/<snapshot_id> --artifact grid_candidates --limit 20
+visualize --snapshot snapshots/<snapshot_id> --artifact grid_streets --limit 20
+```
+
+**Useful flags:**
+- `--artifact <name>` can be repeated to render multiple named artifacts in one run
+- `--all` renders every available named artifact for the snapshot in sequence
+- `--limit <n>` limits displayed rows for CSV artifacts
+- `--columns col1,col2,...` shows only specific CSV columns
+- `--all-columns` shows every column in the artifact
+- `--width <n>` overrides terminal width detection
+- `--path <file>` renders a direct CSV or JSON path instead of a named artifact
+
+**Examples with custom columns:**
+
+```bash
+# Tight view for ranked candidates
+visualize \
+  --snapshot snapshots/<snapshot_id> \
+  --artifact ranked \
+  --columns address,zip,list_price,upside_to_p70,rank_score,confidence_grade \
+  --limit 10
+
+# Tight view for top grid cells
+visualize \
+  --snapshot snapshots/<snapshot_id> \
+  --artifact grid_scoreboard \
+  --columns grid_id,sold_count,active_count,renovation_spread,hunt_score,cell_label \
+  --limit 12
+
+# Review multiple outputs in one pass
+visualize \
+  --snapshot snapshots/<snapshot_id> \
+  --artifact qa \
+  --artifact ranked \
+  --artifact grid_scoreboard \
+  --limit 15
+```
+
+**Direct path examples:**
+
+```bash
+visualize --path snapshots/<snapshot_id>/out/analysis/ranked_candidates.csv --limit 10
+visualize --path snapshots/<snapshot_id>/out/qa/qa_report.json
+```
 
 ### 3.1 Submarket Scoreboard
 
