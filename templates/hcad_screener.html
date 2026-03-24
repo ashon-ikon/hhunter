@@ -1,0 +1,480 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>Deal Screener — HCAD</title>
+  <style>
+    *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+    body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+         background:#0f172a;color:#e2e8f0;min-height:100vh}
+
+    /* ── header ── */
+    header{background:#1e293b;border-bottom:1px solid #334155;
+           padding:14px 24px;display:flex;align-items:center;gap:12px}
+    header a{color:#94a3b8;text-decoration:none;font-size:.85rem}
+    header a:hover{color:#e2e8f0}
+    header h1{font-size:1.1rem;font-weight:700}
+    .hdr-sep{color:#475569}
+
+    /* ── layout ── */
+    .layout{display:grid;grid-template-columns:280px 1fr;gap:0;min-height:calc(100vh - 52px)}
+
+    /* ── sidebar ── */
+    aside{background:#1e293b;border-right:1px solid #334155;padding:20px;overflow-y:auto}
+    aside h2{font-size:.75rem;text-transform:uppercase;letter-spacing:1px;
+             color:#64748b;margin-bottom:12px}
+    .field{margin-bottom:14px}
+    .field label{display:block;font-size:.78rem;color:#94a3b8;margin-bottom:4px}
+    .field input,.field select{
+      width:100%;background:#0f172a;border:1px solid #334155;color:#e2e8f0;
+      border-radius:6px;padding:7px 10px;font-size:.85rem;outline:none;
+      transition:border-color .15s}
+    .field input:focus,.field select:focus{border-color:#60a5fa}
+    .field .hint{font-size:.7rem;color:#475569;margin-top:3px}
+
+    /* deal type pills */
+    .deal-pills{display:flex;flex-direction:column;gap:6px;margin-bottom:18px}
+    .deal-pill{
+      display:flex;align-items:center;gap:9px;padding:9px 12px;
+      border-radius:8px;border:1px solid #334155;cursor:pointer;
+      background:#0f172a;transition:border-color .15s,background .15s}
+    .deal-pill:hover{background:#1e3a5f;border-color:#3b82f6}
+    .deal-pill.active{background:#1e3a5f;border-color:#3b82f6}
+    .deal-pill input[type=radio]{display:none}
+    .pill-dot{width:10px;height:10px;border-radius:50%;flex-shrink:0}
+    .pill-label{font-size:.82rem;font-weight:600}
+    .pill-desc{font-size:.7rem;color:#64748b;line-height:1.3;margin-top:1px}
+
+    .btn-run{
+      width:100%;background:#2563eb;color:#fff;border:none;border-radius:8px;
+      padding:10px;font-size:.88rem;font-weight:700;cursor:pointer;
+      transition:background .15s;margin-top:4px}
+    .btn-run:hover{background:#1d4ed8}
+
+    /* ── main area ── */
+    main{padding:24px;overflow-x:auto}
+    .results-header{
+      display:flex;align-items:center;justify-content:space-between;
+      margin-bottom:16px}
+    .results-count{font-size:.82rem;color:#64748b}
+    .btn-csv{
+      background:#1e293b;border:1px solid #334155;color:#94a3b8;
+      padding:6px 14px;border-radius:6px;font-size:.78rem;cursor:pointer;
+      text-decoration:none;transition:border-color .15s,color .15s}
+    .btn-csv:hover{border-color:#60a5fa;color:#e2e8f0}
+
+    /* ── table ── */
+    table{width:100%;border-collapse:collapse;font-size:.8rem}
+    th{
+      text-align:left;padding:8px 10px;border-bottom:2px solid #334155;
+      color:#64748b;font-size:.72rem;text-transform:uppercase;letter-spacing:.6px;
+      white-space:nowrap}
+    th.sortable{cursor:pointer;user-select:none}
+    th.sortable:hover{color:#e2e8f0}
+    td{padding:8px 10px;border-bottom:1px solid #1e293b;vertical-align:top}
+    tr:hover td{background:#1e293b55}
+
+    /* score cell */
+    .score-wrap{display:flex;align-items:center;gap:6px}
+    .score-bar-bg{width:54px;height:6px;background:#1e293b;border-radius:3px;flex-shrink:0}
+    .score-bar{height:6px;border-radius:3px}
+    .score-num{font-weight:700;font-size:.85rem}
+
+    /* address / acct link */
+    .addr-cell .addr{font-weight:600;color:#e2e8f0}
+    .addr-cell .sub{font-size:.7rem;color:#64748b;margin-top:1px}
+    .acct-link{color:#60a5fa;text-decoration:none;font-size:.7rem}
+    .acct-link:hover{text-decoration:underline}
+
+    /* signals */
+    .signals{margin-top:4px}
+    .sig{font-size:.7rem;color:#94a3b8;display:flex;align-items:flex-start;gap:4px;
+         margin-top:2px;line-height:1.3}
+    .sig-arrow{color:#f59e0b;flex-shrink:0}
+
+    /* owner type badge */
+    .badge{display:inline-block;padding:1px 7px;border-radius:10px;
+           font-size:.67rem;font-weight:700;white-space:nowrap}
+    .badge-entity{background:#7c3aed22;color:#a78bfa;border:1px solid #7c3aed44}
+    .badge-indiv {background:#0284c722;color:#38bdf8;border:1px solid #0284c744}
+
+    /* val cells */
+    .val-hi{color:#fbbf24;font-weight:600}
+    .val-disc{color:#4ade80;font-weight:600}
+    .val-prem{color:#f87171}
+
+    .empty{text-align:center;padding:60px 20px;color:#475569;font-size:.9rem}
+
+    /* ── score legend ── */
+    .legend-toggle{
+      width:100%;background:none;border:1px solid #334155;border-radius:6px;
+      color:#94a3b8;font-size:.75rem;padding:6px 10px;cursor:pointer;
+      text-align:left;margin-top:14px;transition:border-color .15s,color .15s}
+    .legend-toggle:hover{border-color:#60a5fa;color:#e2e8f0}
+    .legend-body{display:none;margin-top:10px}
+    .legend-body.open{display:block}
+    .comp-row{display:flex;align-items:center;gap:8px;margin-bottom:7px}
+    .comp-bar-bg{flex:1;height:5px;background:#1e293b;border-radius:3px;overflow:hidden}
+    .comp-bar{height:5px;border-radius:3px}
+    .comp-label{font-size:.72rem;color:#94a3b8;min-width:90px;flex-shrink:0}
+    .comp-pct{font-size:.7rem;font-weight:700;min-width:28px;text-align:right;flex-shrink:0}
+    .comp-desc{font-size:.67rem;color:#475569;margin-top:1px;padding-left:98px;line-height:1.3}
+
+    /* ── zip pulse panel ── */
+    .zip-pulse{
+      margin-bottom:20px;display:grid;
+      grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:10px}
+    .zip-card{
+      background:#1e293b;border:1px solid #334155;border-radius:10px;
+      padding:14px 16px;position:relative}
+    .zip-card-title{font-size:.78rem;font-weight:700;color:#93c5fd;margin-bottom:10px}
+    .zip-stat-row{display:flex;justify-content:space-between;
+                  font-size:.72rem;margin-bottom:5px}
+    .zip-stat-label{color:#64748b}
+    .zip-stat-val{font-weight:600;color:#e2e8f0}
+    .zip-card-loading{color:#475569;font-size:.75rem;font-style:italic}
+    .zip-card-err{color:#f87171;font-size:.72rem}
+    .har-badge{
+      position:absolute;top:10px;right:12px;
+      font-size:.6rem;color:#475569;font-weight:600;letter-spacing:.4px}
+
+    /* ── responsive ── */
+    @media(max-width:900px){
+      .layout{grid-template-columns:1fr}
+      aside{border-right:none;border-bottom:1px solid #334155}
+    }
+  </style>
+</head>
+<body>
+
+<header>
+  <a href="/">← Dashboard</a>
+  <span class="hdr-sep">|</span>
+  <h1>Parcel Deal Screener</h1>
+  {% if results is not none %}
+    <span style="margin-left:auto;font-size:.78rem;color:#64748b">
+      {{ results|length }} result{{ 's' if results|length != 1 }} · {{ deal_meta.label }}
+    </span>
+  {% endif %}
+</header>
+
+<div class="layout">
+
+  <!-- ── Sidebar ── -->
+  <aside>
+    <form method="GET" action="/screener">
+
+      <h2>Deal Type</h2>
+      <div class="deal-pills">
+        {% for key, meta in deal_types.items() %}
+        <label class="deal-pill {{ 'active' if selected_type == key }}">
+          <input type="radio" name="type" value="{{ key }}" {{ 'checked' if selected_type == key }}>
+          <span class="pill-dot" style="background:{{ meta.color }}"></span>
+          <span>
+            <div class="pill-label">{{ meta.label }}</div>
+            <div class="pill-desc">{{ meta.description }}</div>
+          </span>
+        </label>
+        {% endfor %}
+      </div>
+
+      <h2>Filters</h2>
+
+      <div class="field">
+        <label>ZIP Codes</label>
+        <input type="text" name="zips" value="{{ selected_zips }}"
+               placeholder="77021, 77088  (blank = all)">
+        <div class="hint">Comma-separated. Leave blank for all Harris County.</div>
+      </div>
+
+      <div class="field">
+        <label>Min Deal Score</label>
+        <input type="number" name="min_score" value="{{ min_score }}" min="0" max="100" step="5">
+        <div class="hint">0–100. Higher = stronger signal match.</div>
+      </div>
+
+      <div class="field">
+        <label>Price Range ($)</label>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px">
+          <input type="number" name="min_price" value="{{ min_price or '' }}"
+                 placeholder="Min" step="10000">
+          <input type="number" name="max_price" value="{{ max_price or '' }}"
+                 placeholder="Max" step="10000">
+        </div>
+      </div>
+
+      <div class="field">
+        <label>Max Year Built</label>
+        <input type="number" name="max_year" value="{{ max_year or '' }}"
+               placeholder="e.g. 1980" min="1900" max="2025">
+        <div class="hint">Filter to older stock only.</div>
+      </div>
+
+      <div class="field">
+        <label>Min Years Held</label>
+        <input type="number" name="min_held" value="{{ min_held or '' }}"
+               placeholder="e.g. 10" min="0" max="80">
+        <div class="hint">Current owner must have held X+ years.</div>
+      </div>
+
+      <div class="field">
+        <label>Max Results</label>
+        <select name="limit">
+          {% for n in [25, 50, 100, 200] %}
+          <option value="{{ n }}" {{ 'selected' if limit == n }}>{{ n }}</option>
+          {% endfor %}
+        </select>
+      </div>
+
+      <button type="submit" class="btn-run">▶ Run Screener</button>
+
+    </form>
+
+    <!-- ── Score Legend ── -->
+    <button class="legend-toggle" onclick="toggleLegend(this)">
+      ▸ How is the score calculated?
+    </button>
+    <div class="legend-body" id="legend-body">
+      <div style="font-size:.7rem;color:#475569;margin-bottom:10px;line-height:1.4">
+        Each component is scored 0–100 then weighted. Final score = weighted sum (max 100).
+      </div>
+      {% for name, desc, weight in deal_meta.components %}
+      <div class="comp-row">
+        <span class="comp-label">{{ name }}</span>
+        <div class="comp-bar-bg">
+          <div class="comp-bar" style="width:{{ weight }}%;background:{{ deal_meta.color }}"></div>
+        </div>
+        <span class="comp-pct" style="color:{{ deal_meta.color }}">{{ weight }}%</span>
+      </div>
+      <div class="comp-desc">{{ desc }}</div>
+      {% endfor %}
+    </div>
+
+  </aside>
+
+  <!-- ── Results ── -->
+  <main>
+
+    {% if selected_zips %}
+    <div style="margin-bottom:4px">
+      <div style="font-size:.72rem;text-transform:uppercase;letter-spacing:1px;
+                  color:#64748b;margin-bottom:8px">
+        Live Market Pulse · HAR.com
+      </div>
+      <div class="zip-pulse" id="zip-pulse-grid">
+        {% for z in selected_zips.split(',') if z.strip() %}
+        <div class="zip-card" id="zip-card-{{ z.strip() }}">
+          <div class="zip-card-title">{{ z.strip() }}</div>
+          <div class="har-badge">HAR</div>
+          <div class="zip-card-loading">Loading…</div>
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+    {% endif %}
+
+    {% if results is none %}
+    <div class="empty">
+      Select a deal type and filters, then click <strong>Run Screener</strong>.<br><br>
+      <span style="font-size:.75rem;opacity:.6">
+        Scoring across 1.6M parcels · Flip · BRRR · Buy &amp; Hold · Land Play · Wholesale
+      </span>
+    </div>
+
+    {% elif results|length == 0 %}
+    <div class="empty">No parcels matched your filters. Try lowering Min Score or expanding ZIPs.</div>
+
+    {% else %}
+    <div class="results-header">
+      <span class="results-count">
+        {{ results|length }} properties · sorted by
+        <strong style="color:{{ deal_meta.color }}">{{ deal_meta.label }} score</strong>
+      </span>
+      <a class="btn-csv" href="{{ csv_url }}">⬇ Export CSV</a>
+    </div>
+
+    <table>
+      <thead>
+        <tr>
+          <th>#</th>
+          <th>Score</th>
+          <th>Address</th>
+          <th>ZIP</th>
+          <th>Value</th>
+          <th>$/sqft</th>
+          <th>Built</th>
+          <th>Held</th>
+          <th>Permits</th>
+          <th>Owner</th>
+          <th>Neighborhood</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in results %}
+        {% set score = r[deal_meta.score_col] or 0 %}
+        {% set score_pct = (score / 100 * 54)|int %}
+        <tr>
+          <td style="color:#475569;font-size:.72rem">{{ loop.index }}</td>
+
+          <!-- Score -->
+          <td>
+            <div class="score-wrap">
+              <div class="score-bar-bg">
+                <div class="score-bar" style="width:{{ score_pct }}px;background:{{ deal_meta.color }}"></div>
+              </div>
+              <span class="score-num" style="color:{{ deal_meta.color }}">{{ "%.0f"|format(score) }}</span>
+            </div>
+          </td>
+
+          <!-- Address + signals -->
+          <td class="addr-cell">
+            <div class="addr">{{ r.address }}</div>
+            <div class="sub">
+              <a class="acct-link"
+                 href="https://search.hcad.org/GISMap/?hcad_num={{ r.acct }}&year=2026&api_key=Zq4t7w!z%25C*F-JaNdRfUjXn2r5u8x%2FA%3F"
+                 target="_blank">acct {{ r.acct }} ↗</a>
+              &nbsp;·&nbsp; {{ r.state_class }}
+              &nbsp;·&nbsp; {{ r.sqft|int if r.sqft else '?' }} sqft living
+              {% if r.acreage %}&nbsp;·&nbsp; {{ "%.2f"|format(r.acreage) }} ac
+              ({{ "{:,.0f}".format(r.acreage * 43560) }} sqft lot){% endif %}
+            </div>
+            {% if r.signals %}
+            <div class="signals">
+              {% for sig in r.signals %}
+              <div class="sig"><span class="sig-arrow">→</span>{{ sig }}</div>
+              {% endfor %}
+            </div>
+            {% endif %}
+          </td>
+
+          <td>{{ r.zip }}</td>
+
+          <!-- Value -->
+          <td class="val-hi">${{ "{:,.0f}".format(r.mkt_val or 0) }}</td>
+
+          <!-- $/sqft vs median -->
+          <td>
+            {% if r.ppsf %}
+              {% set disc = r.ppsf_vs_median or 0 %}
+              <span class="{{ 'val-disc' if disc < -0.05 else ('val-prem' if disc > 0.10 else '') }}">
+                ${{ "%.0f"|format(r.ppsf) }}
+              </span>
+              <div style="font-size:.67rem;color:#475569;margin-top:1px">
+                med ${{ "%.0f"|format(r.zip_median_ppsf or 0) }}
+                {% if disc < -0.05 %}
+                  <span style="color:#4ade80">({{ "%.0f"|format(disc*100) }}%)</span>
+                {% elif disc > 0.05 %}
+                  <span style="color:#f87171">(+{{ "%.0f"|format(disc*100) }}%)</span>
+                {% endif %}
+              </div>
+            {% else %}—{% endif %}
+          </td>
+
+          <td>{{ r.yr_impr|int if r.yr_impr else '—' }}</td>
+
+          <!-- Held -->
+          <td>
+            {% if r.years_held %}
+              <span class="{{ 'val-hi' if r.years_held >= 15 else '' }}">
+                {{ r.years_held|int }}y
+              </span>
+            {% else %}—{% endif %}
+          </td>
+
+          <!-- Permits -->
+          <td>
+            {% if r.permit_count %}
+              {{ r.permit_count|int }} total<br>
+              <span style="font-size:.67rem;color:{{ '#4ade80' if r.recent_permits == 0 else '#94a3b8' }}">
+                {{ r.recent_permits|int }} recent
+              </span>
+            {% else %}
+              <span style="color:#4ade80;font-size:.72rem">none on file</span>
+            {% endif %}
+          </td>
+
+          <!-- Owner -->
+          <td>
+            <div style="max-width:130px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+                        font-size:.72rem" title="{{ r.owner_name }}">{{ r.owner_name or '—' }}</div>
+            <span class="badge {{ 'badge-entity' if r.owner_type == 'Entity' else 'badge-indiv' }}">
+              {{ r.owner_type or '?' }}
+            </span>
+          </td>
+
+          <!-- Neighborhood -->
+          <td>
+            <div style="font-size:.72rem;color:#94a3b8;max-width:140px">
+              {{ r.market_area or '—' }}
+            </div>
+            <div style="font-size:.67rem;color:#475569">{{ r.neighborhood_code or '' }}</div>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+
+    {% endif %}
+  </main>
+</div>
+
+<script>
+  // Make deal-pill clicks update active state immediately
+  document.querySelectorAll('.deal-pill input[type=radio]').forEach(function(radio) {
+    radio.addEventListener('change', function() {
+      document.querySelectorAll('.deal-pill').forEach(function(p) { p.classList.remove('active'); });
+      this.closest('.deal-pill').classList.add('active');
+    });
+  });
+
+  // Score legend toggle
+  function toggleLegend(btn) {
+    var body = document.getElementById('legend-body');
+    var open = body.classList.toggle('open');
+    btn.textContent = (open ? '▾' : '▸') + ' How is the score calculated?';
+  }
+
+  // ZIP market pulse — fetch from /api/zip-insight/<zip>
+  function fmt$(n) { return n != null ? '$' + n.toLocaleString() : '—'; }
+  function fmtN(n) { return n != null ? n.toLocaleString() : '—'; }
+
+  function renderZipCard(zip, d) {
+    var el = document.getElementById('zip-card-' + zip);
+    if (!el) return;
+    if (!d.ok) {
+      el.querySelector('.zip-card-loading').outerHTML =
+        '<div class="zip-card-err">Could not load HAR data</div>';
+      return;
+    }
+    el.querySelector('.zip-card-loading').outerHTML = [
+      '<div class="zip-stat-row"><span class="zip-stat-label">Active listings</span>',
+        '<span class="zip-stat-val">' + fmtN(d.total_active) + '</span></div>',
+      '<div class="zip-stat-row"><span class="zip-stat-label">Median list price</span>',
+        '<span class="zip-stat-val">' + fmt$(d.median_list_price) + '</span></div>',
+      '<div class="zip-stat-row"><span class="zip-stat-label">Median $/sqft</span>',
+        '<span class="zip-stat-val">' + (d.median_ppsf ? '$' + d.median_ppsf : '—') + '</span></div>',
+      '<div class="zip-stat-row"><span class="zip-stat-label">Median days on market</span>',
+        '<span class="zip-stat-val">' + fmtN(d.median_dom) + ' days</span></div>',
+      '<div style="border-top:1px solid #334155;margin:8px 0"></div>',
+      '<div class="zip-stat-row"><span class="zip-stat-label">Recent sold</span>',
+        '<span class="zip-stat-val">' + fmtN(d.total_sold) + '</span></div>',
+      '<div class="zip-stat-row"><span class="zip-stat-label">Median sold price</span>',
+        '<span class="zip-stat-val">' + fmt$(d.median_sold_price) + '</span></div>',
+    ].join('');
+  }
+
+  document.querySelectorAll('.zip-card').forEach(function(card) {
+    var zip = card.id.replace('zip-card-', '');
+    fetch('/api/zip-insight/' + zip)
+      .then(function(r) { return r.json(); })
+      .then(function(d) { renderZipCard(zip, d); })
+      .catch(function() {
+        var el = document.getElementById('zip-card-' + zip);
+        if (el) el.querySelector('.zip-card-loading').outerHTML =
+          '<div class="zip-card-err">Network error</div>';
+      });
+  });
+</script>
+</body>
+</html>

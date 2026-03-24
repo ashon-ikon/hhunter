@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>HCAD Heat-Map Dashboard</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: #0f172a;
+      color: #e2e8f0;
+      min-height: 100vh;
+    }
+
+    header {
+      background: #1e293b;
+      border-bottom: 1px solid #334155;
+      padding: 16px 28px;
+      display: flex;
+      align-items: center;
+      gap: 16px;
+    }
+    header h1 { font-size: 1.25rem; font-weight: 700; letter-spacing: -.3px; }
+    header .badge {
+      font-size: .72rem; background: #0ea5e9; color: #fff;
+      padding: 2px 8px; border-radius: 12px; font-weight: 600;
+    }
+    header .focus-pill {
+      margin-left: auto; font-size: .8rem;
+      background: #1d4ed8; padding: 4px 12px; border-radius: 20px;
+    }
+
+    main { padding: 28px; max-width: 1400px; margin: 0 auto; }
+
+    h2 { font-size: .8rem; text-transform: uppercase; letter-spacing: 1px;
+         color: #94a3b8; margin-bottom: 16px; margin-top: 32px; }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(310px, 1fr));
+      gap: 20px;
+    }
+
+    .card {
+      background: #1e293b;
+      border: 1px solid #334155;
+      border-radius: 12px;
+      overflow: hidden;
+      transition: transform .15s, box-shadow .15s;
+      text-decoration: none;
+      color: inherit;
+      display: flex;
+      flex-direction: column;
+    }
+    .card:hover {
+      transform: translateY(-3px);
+      box-shadow: 0 8px 24px rgba(0,0,0,.4);
+      border-color: #60a5fa;
+    }
+    .card.missing { opacity: .55; cursor: not-allowed; }
+
+    .card-header {
+      padding: 18px 20px 12px;
+    }
+    .card-title { font-size: 1rem; font-weight: 600; }
+    .card-desc   { font-size: .82rem; color: #94a3b8; margin-top: 5px; line-height: 1.4; }
+
+    .card-footer {
+      margin-top: auto;
+      padding: 10px 20px;
+      border-top: 1px solid #334155;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: .78rem;
+      color: #64748b;
+    }
+    .dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+    .dot.ready   { background: #22c55e; }
+    .dot.missing { background: #f59e0b; }
+
+    .actions {
+      margin-top: 36px;
+      display: flex;
+      gap: 12px;
+    }
+    .btn {
+      padding: 10px 22px;
+      border-radius: 8px;
+      font-size: .88rem;
+      font-weight: 600;
+      text-decoration: none;
+      cursor: pointer;
+      border: none;
+    }
+    .btn-primary { background: #2563eb; color: #fff; }
+    .btn-primary:hover { background: #1d4ed8; }
+    .btn-secondary { background: #334155; color: #e2e8f0; }
+    .btn-secondary:hover { background: #475569; }
+
+    /* Active map iframe view */
+    .map-view { display: none; }
+    .map-view.active {
+      display: block;
+      position: fixed;
+      inset: 0;
+      z-index: 100;
+      background: #0f172a;
+    }
+    .map-view iframe {
+      width: 100%;
+      height: calc(100vh - 48px);
+      border: none;
+    }
+    .map-view-bar {
+      height: 48px;
+      background: #1e293b;
+      display: flex;
+      align-items: center;
+      padding: 0 16px;
+      gap: 12px;
+      border-bottom: 1px solid #334155;
+    }
+    .map-view-bar a { color: #60a5fa; font-size: .85rem; text-decoration: none; }
+    .map-view-bar a:hover { text-decoration: underline; }
+    .map-view-title { font-weight: 600; font-size: .9rem; }
+  </style>
+</head>
+<body>
+
+<header>
+  <h1>HCAD Heat-Map Dashboard</h1>
+  <span class="badge">Harris County</span>
+  <span class="focus-pill">&#128204; Focus: 77021 &amp; 77088</span>
+</header>
+
+<main>
+  <!-- Deal Screener CTA -->
+  <a href="/screener" style="
+    display:flex;align-items:center;gap:16px;
+    background:linear-gradient(135deg,#1e3a8a,#1e293b);
+    border:1px solid #3b82f6;border-radius:12px;padding:18px 24px;
+    text-decoration:none;color:inherit;margin-bottom:28px;
+    box-shadow:0 4px 20px rgba(59,130,246,.2);transition:transform .15s;
+  " onmouseover="this.style.transform='translateY(-2px)'"
+     onmouseout="this.style.transform=''">
+    <div style="font-size:2rem;flex-shrink:0">🔍</div>
+    <div>
+      <div style="font-size:1rem;font-weight:700;color:#93c5fd">Parcel Deal Screener</div>
+      <div style="font-size:.82rem;color:#64748b;margin-top:3px">
+        Screen 1.6M parcels for Flip · BRRR · Buy &amp; Hold · Land Play · Wholesale deals.
+        Filter by ZIP, price, year built, ownership duration. Export to CSV.
+      </div>
+    </div>
+    <div style="margin-left:auto;color:#3b82f6;font-size:1.2rem">→</div>
+  </a>
+
+  <h2>Available Maps</h2>
+
+  <div class="grid">
+
+    {% set meta = {
+      'price':          ('💰 Price / sqft',         'Median market value per square foot by ZIP. Baseline affordability & pricing landscape.'),
+      'yoy':            ('📈 YOY Value Change',      'Year-over-year appraisal change %. Identifies which ZIPs are appreciating fastest.'),
+      'investor':       ('🏢 Investor Activity',     'LLC / Trust / institutional ownership %. High % = competitive; rising % = capital inflow signal.'),
+      'permits':        ('🔨 Permit Surge',           'Recent building permit rate (2023+). Early indicator of renovation waves & neighborhood transition.'),
+      'gentrification': ('🌆 Gentrification Score',  'Composite 0–100: appreciation + permit surge + investor activity. Spot up-and-coming areas early.'),
+      'flip':           ('🔄 Flip Potential',         'Composite 0–100: below-replacement-cost stock, unrenovated age, holding period. Actionable deal signals.'),
+    } %}
+
+    {% for m in maps %}
+      {% set title, desc = meta.get(m.key, (m.key, '')) %}
+      {% if m.exists %}
+        <a class="card" href="{{ m.url }}" target="_blank">
+      {% else %}
+        <a class="card missing" href="/regen/{{ m.key }}">
+      {% endif %}
+        <div class="card-header">
+          <div class="card-title">{{ title }}</div>
+          <div class="card-desc">{{ desc }}</div>
+        </div>
+        <div class="card-footer">
+          <span class="dot {{ 'ready' if m.exists else 'missing' }}"></span>
+          {% if m.exists %}Ready — click to open{% else %}Not generated — click to build{% endif %}
+        </div>
+      </a>
+    {% endfor %}
+
+  </div>
+
+  <div class="actions">
+    <a class="btn btn-primary" href="/regen">&#8635; Regenerate All Maps</a>
+    <a class="btn btn-secondary" href="#" onclick="window.location.reload()">&#8635; Refresh</a>
+  </div>
+
+  <h2 style="margin-top:48px">How to Use</h2>
+  <ul style="color:#94a3b8;font-size:.85rem;line-height:1.9;padding-left:20px;">
+    <li>Blue dashed border = your focus ZIPs (77021, 77088) — hover for detailed stats.</li>
+    <li>Grey polygons = no data (ZIP filtered out or too few properties).</li>
+    <li>Gentrification score combines YOY %, permit rate, and investor activity into one number.</li>
+    <li>Flip score is highest where properties trade below replacement cost, are unrenovated, and have long holding periods.</li>
+    <li>All maps use <strong>SFR / condo (A1/A2)</strong> properties only, excluding pending appraisals.</li>
+    <li>Regenerate maps after re-ingesting new HCAD data drops.</li>
+  </ul>
+</main>
+
+</body>
+</html>
