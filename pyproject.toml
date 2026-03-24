@@ -9,6 +9,10 @@ dependencies = [
     "pandas>=2.0",
     "python-dateutil>=2.9",
     "requests>=2.31",
+    "duckdb>=1.0",
+    "folium>=0.18",
+    "flask>=3.0",
+    "branca>=0.7",
 ]
 
 [project.optional-dependencies]
@@ -20,12 +24,18 @@ dev = [
 [project.scripts]
 init-snapshot = "src.init_snapshot:main"
 extract-har = "src.extract_har:main"
+extract-agent-listings = "src.extract_agent_listings:main"
+extract-subject-details = "src.extract_subject_details:main"
 normalize = "src.normalize_har:main"
 qa = "src.qa:main"
 analyze = "src.analyze_spreads:main"
 grid-analysis = "src.grid_analysis:main"
 pipeline = "src.pipeline:main"
 visualize = "src.visualize:main"
+hcad-ingest = "src.hcad_ingest:main"
+hcad-maps = "src.hcad_maps:main"
+hcad-app = "src.hcad_app:main"
+hcad-screen = "src.hcad_screener:main"
 
 [build-system]
 requires = ["hatchling"]
