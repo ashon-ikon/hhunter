@@ -39,6 +39,11 @@ def main() -> None:
         "--zip-whitelist",
         help="Comma-separated ZIP whitelist for ranked, scoreboard, and street outputs",
     )
+    parser.add_argument(
+        "--include-pending-prospects",
+        action="store_true",
+        help="Include pending / under-contract listings in candidate-style prospective outputs",
+    )
     parser.add_argument("--skip-grid-analysis", action="store_true", help="Skip grid-based scouting outputs")
     parser.add_argument("--grid-cell-size-m", type=float, default=400.0)
     parser.add_argument("--grid-min-sold", type=int, default=5)
@@ -107,6 +112,7 @@ def main() -> None:
         max_list_price=args.max_list_price,
         min_upside_to_p70=args.min_upside_to_p70,
         zip_whitelist=parse_zip_whitelist(args.zip_whitelist),
+        include_pending=args.include_pending_prospects,
     )
     print(
         "  outputs: "
@@ -127,6 +133,7 @@ def main() -> None:
         min_active=args.grid_min_active,
         export_geojson=args.grid_export_geojson,
         zip_whitelist=parse_zip_whitelist(args.zip_whitelist),
+        include_pending=args.include_pending_prospects,
     )
     print(
         "  outputs: "

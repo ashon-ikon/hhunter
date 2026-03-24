@@ -162,11 +162,25 @@ def normalize_record(raw: dict) -> dict:
     lng = parse_num(pick(raw, "LONGITUDE", "longitude", "lng"))
     vendor_ppsf = parse_num(pick(raw, "PRICEPERSQFT", "pricePerSquareFoot", "ppsf"))
 
-    status_raw = str(pick(raw, "STATUS", "status", "LISTINGSTATUS", "listingStatus") or "")
+    status_raw = str(
+        pick(
+            raw,
+            "STATUS",
+            "status",
+            "LISTINGSTATUS",
+            "listingStatus",
+            "LISTSTATUS",
+            "LISTSTATUS_TEXT",
+            "LISTSTATUS_LBL",
+        )
+        or ""
+    )
     status_lower = status_raw.lower()
+    pending_tokens = {"pend", "pending", "option pending", "pending continue to show", "under contract"}
+    pending_codes = {"op", "ps", "p"}
     if "sold" in status_lower or dataset == "sold":
         status_group = "sold"
-    elif "pend" in status_lower:
+    elif any(token in status_lower for token in pending_tokens) or status_lower in pending_codes:
         status_group = "pending"
     else:
         status_group = "active"

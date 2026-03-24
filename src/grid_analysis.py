@@ -11,6 +11,7 @@ import pandas as pd
 
 from src.analyze_spreads import (
     confidence_penalty_ppsf,
+    filter_prospective_status,
     filter_zip_whitelist,
     find_snapshot,
     legacy_segment,
@@ -253,6 +254,7 @@ def build_candidate_report(
     *,
     min_sold: int,
     min_active: int,
+    include_pending: bool,
     rehab_rate_per_sqft: float,
     sell_cost_pct: float,
     holding_cost_est: float,
@@ -278,7 +280,8 @@ def build_candidate_report(
     if eligible_cells.empty:
         return pd.DataFrame()
 
-    candidates = active.merge(eligible_cells, on="grid_id", how="inner")
+    prospective = filter_prospective_status(active, include_pending=include_pending)
+    candidates = prospective.merge(eligible_cells, on="grid_id", how="inner")
     if candidates.empty:
         return pd.DataFrame()
     candidates = candidates[candidates["sqft"].notna() & candidates["calc_ppsf_list"].notna()].copy()
@@ -431,6 +434,7 @@ def run_grid_analysis(
     segment: str = "legacy_sfr_flip",
     export_geojson: bool = False,
     zip_whitelist: set[str] | None = None,
+    include_pending: bool = False,
     rehab_rate_per_sqft: float = 45.0,
     sell_cost_pct: float = 0.08,
     holding_cost_est: float = 15_000.0,
@@ -471,6 +475,7 @@ def run_grid_analysis(
         scoreboard,
         min_sold=min_sold,
         min_active=min_active,
+        include_pending=include_pending,
         rehab_rate_per_sqft=rehab_rate_per_sqft,
         sell_cost_pct=sell_cost_pct,
         holding_cost_est=holding_cost_est,
@@ -514,6 +519,11 @@ def main() -> None:
     parser.add_argument("--min-active", type=int, default=3)
     parser.add_argument("--segment", default="legacy_sfr_flip")
     parser.add_argument("--zip-whitelist", help="Comma-separated ZIP whitelist for grid outputs")
+    parser.add_argument(
+        "--include-pending-prospects",
+        action="store_true",
+        help="Include pending / under-contract listings in grid candidate outputs",
+    )
     parser.add_argument("--export-geojson", action="store_true")
     parser.add_argument("--rehab-rate-per-sqft", type=float, default=45.0)
     parser.add_argument("--sell-cost-pct", type=float, default=0.08)
@@ -535,6 +545,7 @@ def main() -> None:
         segment=args.segment,
         export_geojson=args.export_geojson,
         zip_whitelist=zip_whitelist,
+        include_pending=args.include_pending_prospects,
         rehab_rate_per_sqft=args.rehab_rate_per_sqft,
         sell_cost_pct=args.sell_cost_pct,
         holding_cost_est=args.holding_cost_est,

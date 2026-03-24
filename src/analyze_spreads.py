@@ -63,6 +63,13 @@ def filter_zip_whitelist(df: pd.DataFrame, zip_whitelist: set[str] | None) -> pd
     return work[work["zip"].astype(str).str.zfill(5).isin(zip_whitelist)]
 
 
+def filter_prospective_status(df: pd.DataFrame, include_pending: bool) -> pd.DataFrame:
+    if df.empty or include_pending or "status_group" not in df.columns:
+        return df
+    work = df.copy()
+    return work[work["status_group"] != "pending"]
+
+
 def legacy_segment(
     df: pd.DataFrame,
     require_flip_box: bool = False,
@@ -139,8 +146,10 @@ def analyze_candidates(
     min_upside_to_p70: float | None = None,
     sold_data_capped: bool = False,
     sold_cap_severity: str = "none",
+    include_pending: bool = False,
 ) -> pd.DataFrame:
-    work = legacy_segment(active, require_flip_box=require_flip_box, max_list_price=max_list_price)
+    prospective = filter_prospective_status(active, include_pending=include_pending)
+    work = legacy_segment(prospective, require_flip_box=require_flip_box, max_list_price=max_list_price)
     rows: list[dict] = []
 
     for _, subject in work.iterrows():
@@ -279,6 +288,7 @@ def run_analysis(
     max_list_price: float | None = None,
     min_upside_to_p70: float | None = None,
     zip_whitelist: set[str] | None = None,
+    include_pending: bool = False,
 ) -> dict:
     require_qa_pass(snapshot, force)
     active, sold, _ = load_norm(snapshot)
@@ -308,6 +318,7 @@ def run_analysis(
         min_upside_to_p70=min_upside_to_p70,
         sold_data_capped=sold_data_capped,
         sold_cap_severity=sold_cap_severity,
+        include_pending=include_pending,
     )
     scoreboard = build_scoreboard(active, sold)
     streets = build_streets(active, sold)
@@ -360,6 +371,11 @@ def main() -> None:
         "--zip-whitelist",
         help="Comma-separated ZIP whitelist for ranked, scoreboard, and street outputs",
     )
+    parser.add_argument(
+        "--include-pending-prospects",
+        action="store_true",
+        help="Include pending / under-contract listings in ranked prospective candidates",
+    )
     args = parser.parse_args()
 
     snapshot = find_snapshot(args.snapshot)
@@ -371,6 +387,7 @@ def main() -> None:
         max_list_price=args.max_list_price,
         min_upside_to_p70=args.min_upside_to_p70,
         zip_whitelist=parse_zip_whitelist(args.zip_whitelist),
+        include_pending=args.include_pending_prospects,
     )
 
     print(f"Snapshot: {result['snapshot_name']}")
