@@ -1,437 +1,270 @@
-# Technical Architecture
+# Architecture
 
-Detailed technical design, algorithms, and data models for House Hunter.
+House Hunter has two independent analysis systems sharing a codebase and a Flask web server.
 
-## System Overview
+---
 
-House Hunter is a **three-stage data pipeline**:
+## System Map
 
 ```
-┌──────────────────┐
-│  RAW DATA        │  HAR API / Browser Export
-│  (JSON)          │  SearchListings responses
-└────────┬─────────┘
-         │
-         ▼
-┌──────────────────┐
-│  NORMALIZATION   │  Coerce types, clean fields
-│  (CSV)           │  Split active/sold, normalize ZIPs
-└────────┬─────────┘
-         │
-         ▼
-┌──────────────────┐
-│  ANALYSIS        │  Cohort building, spread computation
-│  (Reports)       │  Market scorecards, rankings
-└──────────────────┘
+┌──────────────────────────────────────────────────────────────────┐
+│  HCAD PUBLIC DATA                                                │
+│  real_acct.txt  owners.txt  deeds.txt  permits.txt              │
+│  (TSV, ~1.6M–2.5M rows each)                                    │
+└─────────────────────┬────────────────────────────────────────────┘
+                      │  hcad_ingest.py (ETL, ~2 min)
+                      ▼
+┌──────────────────────────────────────────────────────────────────┐
+│  DuckDB  (data/hcad.duckdb, ~1 GB)                              │
+│                                                                  │
+│  tables:  properties  owners  deeds  permits  neighborhood_codes │
+│  views:   sfr  sfr_enriched                                      │
+└──────┬───────────────────────────────────────────────────────────┘
+       │
+       ├─── hcad_scores.py ──► ZIP-level DataFrames (6 metrics)
+       │                              │
+       │         hcad_maps.py ◄───────┘
+       │              │  Folium choropleth HTML
+       │              ▼
+       │      static/hcad_maps/*.html
+       │
+       └─── hcad_screener.py ──► Parcel-level ranked DataFrame
+                                         │
+                                         ▼
+                              hcad_app.py (Flask)
+                              ├── /                → dashboard
+                              ├── /map/<key>       → choropleth map
+                              ├── /screener        → deal screener UI
+                              ├── /regen[/<key>]   → regenerate maps
+                              └── /api/zip-insight → HAR.com live data
+
+┌──────────────────────────────────────────────────────────────────┐
+│  HAR.COM  (live API, no auth)                                    │
+│  https://www.har.com/api/SearchListings                          │
+└──────────────────────┬───────────────────────────────────────────┘
+                       │  Browser HAR export  OR  direct API call
+                       ▼
+               snapshots/<id>/raw/har/
+                       │
+                       ├── extract_har.py     ← parse HAR / JSON
+                       ├── normalize_har.py   ← clean CSV tables
+                       ├── analyze_spreads.py ← cohort + spread
+                       ├── grid_analysis.py   ← 400m grid scoring
+                       └── visualize.py       ← terminal viewer
 ```
 
 ---
 
-## Stage 1: Raw Data Capture
+## HCAD Pipeline
 
-### Input Sources
+### ETL — `hcad_ingest.py`
 
-**HAR API (SearchListings)**
-- Endpoint: `https://www.har.com/api/SearchListings`
-- Query params: `zip_code`, `for_sale` (0=rentals, 1=sales), `sort`, `view`
-- Response: JSON with `data` (active) and `sold_data` (closed) arrays
-- Auth: Browser cookies (via HAR export or direct API)
-- Limitations: 1MB response limit per HAR capture
-
-**HAR File Export**
-- Browser DevTools Network → Save as HAR
-- Contains full HTTP request/response including body (may be truncated)
-- Parsed to extract SearchListings responses
-
-**Direct JSON Files**
-- JSONC files (JSON with `//` comments) supported
-- Manually exported or cached API responses
-
-### Data Schema (Raw)
-
-Each listing record contains ~150 fields:
-
-```json
-{
-  "MLSNUM": "75866936",
-  "LISTINGID": 12345678,
-  "FULLSTREETADDRESS": "1117 W 17th St",
-  "CITY": "Houston",
-  "ZIP": "77008",
-  "STATE": "TX",
-  "BEDROOM": 3,
-  "BATHFULL": 2,
-  "BATHHALF": 1,
-  "BLDGSQFT": 2322,
-  "BLDGSQFTSRC": "Appraisal",
-  "LOTSIZE": 2500,
-  "YEARBUILT": 2006,
-  "PROPTYPENAME": "Single-Family",
-  "SUBDIVISION": "Heights District",
-  "MARKETAREA": "Heights/Greater Heights",
-  "LISTPRICEORI": 440000,
-  "PRICEPERSQFT": 189,
-  "DAYSONMARKET": 37,
-  "DOM": 37,
-  "SALESPRICE": null,
-  "LISTSTATUS": "Active",
-  "AGENTLISTNAME": "Jane Doe",
-  "OFFICELISTNAME": "Keller Williams",
-  "LATITUDE": 29.800285,
-  "LONGITUDE": -95.420281,
-  "RESTRICTION": "Deed Restrictions",
-  "HASPRIVATEPOOL": false,
-  "GARAGENUM": 2,
-  ...
-}
-```
-
----
-
-## Stage 2: Normalization
-
-### Process: `normalize_har.py`
-
-**Input**: Raw JSON (from HAR or API)
-
-**Steps**:
-
-1. **Parse JSON**
-   - Remove JSONC comments if present
-   - Handle gzip compression (if any)
-   - Extract `data` (active) and `sold_data` (closed) arrays
-
-2. **Type Coercion**
-   - Numeric fields: coerce to `float64`, invalid → `NaN`
-   - String fields: preserve case, trim whitespace
-   - Boolean fields: parse "true"/"false" strings
-   - Date fields: parse ISO 8601 or M/D/YYYY
-
-3. **Field Normalization**
-   - ZIP: pad to 5 digits (e.g., "8" → "00008")
-   - Prices: remove $ and commas if string
-   - DOM: ensure numeric (not "N/A")
-   - Property type: standardize naming
-
-4. **Output**: Two CSV files
-   - `{snapshot}_active.csv` - Active listings
-   - `{snapshot}_sold.csv` - Closed listings
-
-### Data Quality Checks
+Loads all five HCAD TSV files into DuckDB with `all_varchar=true` to prevent automatic type inference (which breaks `TRIM()` on date and numeric columns):
 
 ```python
-# Numeric field list (auto-coerce)
-NUMERIC_FIELDS = [
-    "LISTPRICEORI", "SALESPRICE", "PRICEPERSQFT",
-    "BLDGSQFT", "LOTSIZE", "ACRES", "BEDROOM", "BATHFULL",
-    "DAYSONMARKET", "DOM", "YEARBUILT", "LATITUDE", "LONGITUDE"
-]
-
-# For each record:
-for field in NUMERIC_FIELDS:
-    df[field] = pd.to_numeric(df[field], errors='coerce')
+read_csv(path, sep='\t', header=true, quote='',
+         null_padding=true, all_varchar=true, ignore_errors=true)
 ```
 
-**Result**: Clean, machine-readable data
+**Key views created:**
+
+`sfr` — Single-family residential parcels:
+- `state_class IN ('A1', 'A2')`
+- `bld_ar > 200` (has a real structure)
+- Valid 5-digit ZIP
+- `value_status NOT LIKE '%Pending%'`
+
+`sfr_enriched` — Adds four derived metrics:
+| Column | Formula |
+|--------|---------|
+| `yoy_pct` | `100 × (tot_mkt_val - prior_tot_mkt_val) / prior_tot_mkt_val` |
+| `price_per_sqft` | `tot_mkt_val / bld_ar` |
+| `mkt_to_rcn_ratio` | `tot_mkt_val / tot_rcn_val` (< 1 = buying below replacement cost) |
+| `building_age` | `2026 - yr_impr` |
 
 ---
 
-## Stage 3: Analysis & Reporting
+### ZIP Scoring — `hcad_scores.py`
 
-### Core Algorithm: Cohort Building
+Six functions, each returning a ZIP-level DataFrame:
 
-Given a subject property (active listing), find comparable sales:
+| Function | Output columns | Notes |
+|----------|---------------|-------|
+| `price_heatmap()` | `median_price_per_sqft`, `median_value`, `median_sqft`, `num_properties` | |
+| `yoy_heatmap()` | `median_yoy_pct`, `pct_appreciating`, `pct_surging` | `pct_surging` = YOY > 10% |
+| `investor_heatmap()` | `investor_pct`, `investor_owned` | Entity detection: LLC, LP, Trust, Inc, Corp, Invest, Holdings, Realty, Partners |
+| `permit_surge_heatmap()` | `recent_permit_rate`, `permits_since_2023`, `new_construction` | |
+| `gentrification_score()` | `gentrification_score` | 40% YOY + 30% permit rate + 30% investor pct, normalized 0–100 |
+| `flip_potential_heatmap()` | `flip_score`, `pct_below_rcn`, `pct_unrenovated`, `median_building_age`, `median_years_held` | 35% below-RCN + 25% unrenovated + 25% age + 15% years held |
 
-```python
-def build_cohort(
-    sold_df,           # All closed listings
-    zip_code,          # Required: exact match
-    proptype,          # Required: e.g., "Single-Family"
-    beds,              # Optional: ±1
-    bathfull,          # Optional: ±1
-    sqft,              # Optional: ±15%
-    yearbuilt,         # Optional: ±10 years
-    dom_cutoff=120,    # Exclude stale listings
-):
-    """
-    Build comparable sales cohort from sold listings.
-    """
-    cohort = sold_df.copy()
+`all_scores()` returns all six DataFrames as a dict.
 
-    # Hard filters
-    cohort = cohort[cohort['ZIP'] == str(zip_code).zfill(5)]
-    cohort = cohort[cohort['PROPTYPENAME'] == proptype]
+---
 
-    # Soft filters (ranges)
-    if beds:
-        cohort = cohort[cohort['BEDROOM'].between(beds - 1, beds + 1)]
-    if bathfull:
-        cohort = cohort[cohort['BATHFULL'].between(bathfull - 1, bathfull + 1)]
-    if sqft > 0:
-        lo, hi = sqft * 0.85, sqft * 1.15  # ±15%
-        cohort = cohort[cohort['BLDGSQFT'].between(lo, hi)]
-    if yearbuilt:
-        # Tighter band for newer homes (infill)
-        band = 8 if yearbuilt >= 2018 else 10
-        cohort = cohort[cohort['YEARBUILT'].between(yearbuilt - band, yearbuilt + band)]
+### Map Generation — `hcad_maps.py`
 
-    # Quality filter
-    cohort = cohort[cohort['DOM'] <= dom_cutoff]
-    cohort = cohort[pd.notna(cohort['PRICEPERSQFT'])]
+Uses Folium (`folium.Choropleth`) to render Leaflet.js maps over CartoDB Positron tiles.
 
-    return cohort
+**GeoJSON source**: `https://raw.githubusercontent.com/OpenDataDE/State-zip-code-GeoJSON/master/tx_texas_zip_codes_geo.min.json`
+Cached to `data/houston_zcta.geojson` after first fetch. Filtered to 138 Houston-area ZIPs.
+
+**ZIP polygon key**: The GeoJSON uses `ZCTA5CE10`; the code normalizes it to `ZCTA5CE` to match the score DataFrames.
+
+**Focus ZIPs** (77021, 77088): rendered with a blue dashed overlay layer (`#1a1aff`, dashArray `6 3`, weight 3).
+
+**Cross-metric ZIP data blob**: `build_all_zip_json(scores)` merges selected columns from all 6 DataFrames by ZIP into a single JSON object embedded in every map's `<script>` tag. This is what powers the ZIP insert card — any map can show all 18 metrics because the full dataset is baked into the HTML.
+
+**Snapshot UI** (`_build_snapshot_ui()`): injected as raw HTML/CSS/JS via `folium.Element`. Contains:
+- Right panel: focus ZIP insights + top 5 ZIPs + Houston median
+- Left card: ZIP insert card (hidden until a polygon is clicked)
+- Snapshot button with `[S]` keyboard shortcut
+- `html2canvas` (CDN) for client-side PNG capture
+
+---
+
+### Deal Screener — `hcad_screener.py`
+
+All scoring is computed in a single DuckDB SQL query using CTEs. No Python loops over rows.
+
+**CTE chain:**
+```
+zip_stats        ← ZIP-level median ppsf, value, YOY, mkt-to-rcn
+latest_deed      ← Most recent deed date per acct
+latest_permit    ← Permit count and recency per acct
+primary_owner    ← Owner name + entity/individual classification
+base             ← JOIN all of the above + compute derived fields
+SELECT *         ← Add all 5 score columns inline
+ORDER BY <score_col> DESC
+LIMIT <n * 3>    ← Over-fetch, then filter by min_score in Python
 ```
 
-### Spread Computation
+**Score formulas** (all 0–100, weights sum to 100%):
 
-```python
-def compute_spread(subject, cohort):
-    """
-    Calculate price gap between active listing and sold comps.
-    """
-    active_ppsf = subject['PRICEPERSQFT']
-    sold_median_ppsf = cohort['PRICEPERSQFT'].median()
-
-    spread = active_ppsf - sold_median_ppsf
-
-    return {
-        'active_ppsf': active_ppsf,
-        'sold_median_ppsf': sold_median_ppsf,
-        'spread': spread,
-        'interpretation': (
-            'Below market 🎯' if spread < -25 else
-            'At market' if -25 <= spread <= 25 else
-            'Above market ⚠️'
-        )
-    }
+```sql
+-- Flip Score
+LEAST(GREATEST(0, 1 - mkt_to_rcn_ratio), 1.0) * 100 * 0.25   -- RCN gap
++ unrenovated * 100 * 0.20                                      -- no permits since 2015
++ LEAST(building_age / 80.0, 1.0) * 100 * 0.20                -- age
++ LEAST(GREATEST(0, -ppsf_vs_median), 0.5) * 100 * 0.20       -- discount to ZIP median
++ LEAST(years_held / 20.0, 1.0) * 100 * 0.15                  -- ownership lag
 ```
 
-**Example**:
-- Subject PPSF: $189
-- Cohort median: $256
-- **Spread: -$67** = Subject is $155k below market on 2,322 sqft property
+`ppsf_vs_median = (parcel_ppsf - zip_median_ppsf) / zip_median_ppsf`
+— negative = trading at a discount.
 
-### Report Types
+**Signal generation** (`deal_signals()`): Takes a row Series and returns 2–4 human-readable bullet strings based on thresholds (e.g., > 15% below RCN, held ≥ 10 years, > 10% below ZIP median $/sqft).
 
-#### 1. Submarket Scoreboard
+---
 
-Groups listings by ZIP code and computes:
+### Flask App — `hcad_app.py`
 
-```python
-scoreboard = pd.DataFrame({
-    'ZIP': [...],
-    'sold_count': [...],           # Number of sales
-    'sold_median_ppsf': [...],     # Market price level
-    'sold_median_dom': [...],      # Market velocity
-    'active_count': [...],         # Active inventory
-    'active_median_ppsf': [...],   # Ask price level
-    'ppsf_gap': [...],             # (active - sold) = market direction
-})
+| Route | Method | Description |
+|-------|--------|-------------|
+| `/` | GET | Dashboard with 6 map cards and screener CTA |
+| `/map/<key>` | GET | Serve pre-generated HTML map (price/yoy/investor/permits/gentrification/flip) |
+| `/regen` | GET | Regenerate all 6 maps |
+| `/regen/<key>` | GET | Regenerate one map |
+| `/screener` | GET | Deal screener UI; supports all filter params + `fmt=csv` |
+| `/api/zip-insight/<zip>` | GET | Live HAR.com market data for one ZIP (JSON) |
+
+`/api/zip-insight/<zip>` fetches `https://www.har.com/api/SearchListings` with `view=map` and computes: active count, median list price, median $/sqft, median DOM, sold count, median sold price.
+
+---
+
+## HAR Snapshot Pipeline
+
+### Data Flow
+
+```
+Browser DevTools export  ─→  extract_har.py
+  (.har, .json, .jsonc)            │
+                                   ▼
+                        out/extracted/listings_raw.json
+                                   │
+                          normalize_har.py
+                                   │
+                   ┌───────────────┼──────────────────┐
+                   ▼               ▼                  ▼
+             active.csv        sold.csv          rentals.csv
+                   │               │
+              analyze_spreads.py ──┘
+                   │
+          ┌────────┼──────────────┐
+          ▼        ▼              ▼
+   ranked_candidates  scoreboard  streets_top
+          │
+   grid_analysis.py
+          │
+   grid_scoreboard  grid_candidates  grid_streets
 ```
 
-**Interpretation**:
-- `ppsf_gap < -20`: Actives priced below market (buyer's market / overstock)
-- `ppsf_gap > +20`: Actives priced above market (seller's market / scarce)
-- `sold_count < 5`: Insufficient comps (unreliable)
+### Cohort Algorithm
 
-#### 2. Ranked Opportunities
+For a subject property, find comparable sold listings with:
+- Exact ZIP match
+- Same `PROPTYPENAME`
+- Beds ±1, baths ±1
+- Sqft ±15%
+- Year built ±10 (or ±8 for infill built ≥ 2018)
+- DOM ≤ 120
 
-Ranks active listings by spread (best deals first):
+**Spread**: `active_ppsf - median(cohort_ppsf)`
 
-```python
-ranked = active_df.groupby('MLSNUM').apply(
-    lambda row: subject_vs_cohort(active_df, sold_df, row['MLSNUM'])
-).sort_values('PPSF_SPREAD')
-```
-
-**Filters applied**:
-- Only properties with ≥3 comps (sample size)
-- Only valid spreads (not NaN)
-- Sorted ascending (negative = deals)
-
-#### 3. Subject Analysis
-
-For a single property, outputs:
-- Subject attributes
-- Matching cohort (all comps)
-- Spread metrics
-- Interpretation
+Negative spread = priced below comparable recent sales.
 
 ---
 
-## Data Model
+## External APIs
 
-### Table Structure (CSV Output)
+| API | Auth | Usage |
+|-----|------|-------|
+| `www.har.com/api/SearchListings` | None | Live listing data (active, sold, rentals) per ZIP |
+| `raw.githubusercontent.com/OpenDataDE/...` | None | Texas ZIP code GeoJSON polygons |
+| `search.hcad.org/GISMap/?hcad_num=...` | None (api_key in URL) | HCAD property detail page (per-account link) |
+| `arcweb.hcad.org/server/rest/services/public/public_query/MapServer/0/query` | None | HCAD parcel polygons + centroids by HCAD_NUM (ArcGIS REST) |
 
-**active.csv / sold.csv columns:**
-
-| Field | Type | Notes |
-|-------|------|-------|
-| MLSNUM | int | MLS listing number (PK) |
-| LISTINGID | int | Internal HAR ID |
-| FULLSTREETADDRESS | str | Address |
-| ZIP | str | 5-digit ZIP |
-| CITY | str | City name |
-| PROPTYPENAME | str | "Single-Family", "Duplex", "Lot", etc. |
-| BEDROOM | float | May be null for lots |
-| BATHFULL | float | Full baths |
-| BATHHALF | float | Half baths |
-| BLDGSQFT | float | Building sqft (null for lots) |
-| LOTSIZE | float | Lot sqft |
-| YEARBUILT | float | Year (null for undeveloped lots) |
-| LISTPRICEORI | float | List/ask price (or monthly rent if rental) |
-| SALESPRICE | float | Sale price (closed listings) |
-| PRICEPERSQFT | float | $ per sqft of building |
-| DOM | float | Days on market |
-| DAYSONMARKET | float | Synonym for DOM |
-| SUBDIVISION | str | Subdivision name |
-| MARKETAREA | str | Market area (e.g., "Heights/Greater Heights") |
-| LISTSTATUS | str | "Active", "Closed", "Under Contract", etc. |
-| RESTRICTION | str | "Deed Restrictions", "No Restrictions", etc. |
-| AGENTLISTNAME | str | Listing agent name |
-| OFFICELISTNAME | str | Listing brokerage |
-| LATITUDE | float | GPS latitude |
-| LONGITUDE | float | GPS longitude |
-| HASPRIVATEPOOL | bool | Has pool? |
-| GARAGENUM | float | Number of garage spaces |
-| __dataset | str | "active" or "sold" (added during normalization) |
-
-### Key Relationships
-
-- **ZIP → Market Area**: Many ZIPs belong to one market area
-- **Property Type → Price**: Single-family ≠ duplex ≠ lot
-- **Year Built → Price**: Infill (2015+) commands premium vs legacy
-- **DOM → Quality**: High DOM suggests overpriced or problem property
-- **PPSF → Valuation**: Primary metric for cohort comparison
+The ArcGIS REST API (`arcweb.hcad.org`) returns parcel geometry and centroid lat/lon by account number. This is the foundation for Phase 3 H3 grid maps without requiring external geocoding.
 
 ---
 
-## Algorithm Limitations & Future Improvements
+## Data Schema
 
-### Current Limitations
+### DuckDB tables
 
-1. **Cohort size bias**: Small cohorts (n<3) are unreliable
-   - Solution: Expand filtering to larger geography
+**`properties`** (from `real_acct.txt`):
 
-2. **List price assumption**: Assumes active PPSF = market price
-   - Reality: Active prices are "aspirational"; sold prices are actual
-   - Mitigation: Use sold price for actives once they close
+| Column | Type | Notes |
+|--------|------|-------|
+| `acct` | VARCHAR | HCAD account number (PK) |
+| `site_addr_1` | VARCHAR | Street address |
+| `zip` | VARCHAR | 5-digit ZIP |
+| `state_class` | VARCHAR | `A1` = SFR, `A2` = residential condo |
+| `bld_ar` | DOUBLE | Living area (sqft) |
+| `land_ar` | DOUBLE | Lot area (sqft) |
+| `acreage` | DOUBLE | Lot size in acres |
+| `yr_impr` | INTEGER | Year structure built |
+| `tot_mkt_val` | DOUBLE | Total market value |
+| `tot_rcn_val` | DOUBLE | Replacement cost new |
+| `land_val` | DOUBLE | Land value only |
+| `bld_val` | DOUBLE | Improvement value |
+| `prior_tot_mkt_val` | DOUBLE | Prior year market value |
+| `neighborhood_code` | VARCHAR | HCAD neighborhood code |
+| `market_area_1_dscr` | VARCHAR | Market area description |
 
-3. **Year built granularity**: ±10 year band may mix eras
-   - Example: 1995 home vs 2005 home (different construction)
-   - Solution: Use infill threshold (2015+) for tighter segments
+**`owners`** (from `owners.txt`):
+- `acct`, `ln_num` (line number, 1 = primary owner), `name`
 
-4. **Market area heterogeneity**: Even within ZIP, huge variation
-   - Example: Flood zone vs elevated = 20% price delta
-   - Solution: Add flood zone, school district as filters
+**`deeds`** (from `deeds.txt`):
+- `acct`, `deed_date`, `instrument_num`
 
-5. **No adjustment factors**: Treated all comps equally
-   - Reality: Corner lot, pool, recent renovation = premium
-   - Solution: Use hedonic regression for adjustment
-
-### Roadmap Improvements
-
-- **Phase 2**: Add filters for lot characteristics (pool, corner, etc.)
-- **Phase 3**: Hedonic regression for automatic adjustment factors
-- **Phase 4**: Machine learning to predict DOM and sale price
-- **Phase 5**: Time-series tracking (track same property over months)
-
----
-
-## Performance Characteristics
-
-### Data Processing Speed
-
-| Operation | Time (120 listings) | Time (1000 listings) |
-|-----------|------------------|----------------------|
-| Extract from HAR | ~2 sec | ~15 sec |
-| Normalize to CSV | ~1 sec | ~3 sec |
-| Load CSVs | ~0.5 sec | ~2 sec |
-| Build single cohort | ~0.1 sec | ~0.5 sec |
-| Rank all actives | ~30 sec | ~300 sec |
-| Generate scoreboard | ~1 sec | ~5 sec |
-
-**Bottleneck**: Ranking all properties (N×M comparisons)
-
-**Optimization (Phase 2)**:
-- Cache cohort results
-- Parallel processing (multiprocessing.Pool)
-- Database indexing (SQLite/PostgreSQL)
-
-### Memory Usage
-
-- 120 listings: ~30 MB
-- 1000 listings: ~250 MB
-- 10000 listings: ~2.5 GB
+**`permits`** (from `permits.txt`):
+- `acct`, `issue_date`, `permit_type`, `description`
 
 ---
 
-## Error Handling
+## Performance Notes
 
-### Graceful Degradation
-
-```python
-# Parse invalid JSON: try JSONC, then raw
-try:
-    data = json.loads(text)
-except json.JSONDecodeError:
-    # Try removing comments
-    clean = re.sub(r'//.*?\n', '\n', text)
-    data = json.loads(clean)
-
-# Numeric field coercion: invalid → NaN (not 0)
-df['PRICEPERSQFT'] = pd.to_numeric(df['PRICEPERSQFT'], errors='coerce')
-
-# Cohort building: filter as much as possible
-if cohort.empty:
-    # Return "no comps available" rather than crash
-    return {'error': 'Insufficient comparables', 'n': 0}
-```
-
----
-
-## Security Considerations
-
-### Data Privacy
-- ✅ No PII collected (public MLS data only)
-- ✅ All data local (no cloud storage)
-- ⚠️ HAR exports contain cookies (store securely, don't commit)
-
-### Input Validation
-- Validates JSON structure before processing
-- Sanitizes file paths
-- Type-checks API parameters
-
-### Rate Limiting
-- Respects HAR API rate limits (implement backoff, Phase 2)
-- Consider MLS direct access for production use
-
----
-
-## Testing Strategy (Coming)
-
-```python
-# tests/test_normalize.py
-def test_coerce_numeric():
-    df = pd.DataFrame({'price': ['$100,000', 'invalid', 100000]})
-    result = to_numeric(df)
-    assert result['price'].isna().sum() == 1  # "invalid" → NaN
-
-# tests/test_cohort.py
-def test_build_cohort_empty_filter():
-    cohort = build_cohort(sold_df, zip='12345', proptype='Nonexistent')
-    assert len(cohort) == 0
-
-# tests/test_spread.py
-def test_spread_computation():
-    spread = compute_spread(subject, cohort)
-    assert spread['spread'] == spread['active_ppsf'] - spread['sold_median_ppsf']
-```
-
----
-
-## See Also
-
-- [ROADMAP.md](../roadmap/ROADMAP.md) - Implementation phases
-- [README.md](../../README.md) - Project overview
-- [USAGE.md](../guides/USAGE.md) - How to use the tool
+- DuckDB processes all 1.6M parcels for a scored screener query in ~2–4 seconds (in-process, no network)
+- Map generation (all 6 maps) takes ~30 seconds
+- The `sfr_enriched` view is computed on every query — no materialization needed given DuckDB's speed
+- GeoJSON is fetched once and cached locally; subsequent `hcad-maps` runs use the cache

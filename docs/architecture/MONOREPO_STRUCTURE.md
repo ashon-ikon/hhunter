@@ -1,495 +1,135 @@
-# Monorepo Structure (Future: Hosted Service)
+# Project Structure
 
-This document outlines how House Hunter will be restructured as a monorepo when transitioning to a hosted SaaS platform (Phase 2+).
+Current layout of the repository as of March 2026.
 
-## Current Structure (Phase 1: CLI Only)
+---
+
+## Directory Tree
 
 ```
 house-hunter/
-├── src/                    ← Single Python package
+│
+├── src/                            ← Python package
 │   ├── __init__.py
-│   ├── extract_har.py
-│   ├── normalize_har.py
-│   ├── analyze_spreads.py
-│   └── fetch_searchlistings.py
-├── data/                   ← User data (local)
-│   ├── raw/
-│   └── processed/
-├── docs/                   ← Documentation
-├── tests/                  ← Tests (coming)
-├── pyproject.toml          ← Python package config
-└── README.md
-```
-
-**Limitation**: Single CLI tool, no web UI, no API, no persistence
-
----
-
-## Target Structure (Phase 2-3: Hosted Service)
-
-When we add web UI, API, and scheduling, we'll restructure as a **monorepo**:
-
-```
-house-hunter-monorepo/
-├── services/               ← Microservices
-│   ├── data-pipeline/      ← Current Python CLI (moved here)
-│   │   ├── src/
-│   │   │   ├── extract_har.py
-│   │   │   ├── normalize_har.py
-│   │   │   ├── analyze_spreads.py
-│   │   │   └── fetch_searchlistings.py
-│   │   ├── tests/
-│   │   ├── pyproject.toml
-│   │   ├── Dockerfile
-│   │   └── README.md       ← Data pipeline docs
 │   │
-│   ├── api/                ← FastAPI REST service (NEW)
-│   │   ├── app/
-│   │   │   ├── __init__.py
-│   │   │   ├── main.py     ← FastAPI app
-│   │   │   ├── routes/     ← API endpoints
-│   │   │   │   ├── __init__.py
-│   │   │   │   ├── listings.py     # /api/listings/*
-│   │   │   │   ├── analysis.py     # /api/analysis/*
-│   │   │   │   └── accounts.py     # /api/accounts/* (Phase 3)
-│   │   │   ├── models/     ← Pydantic schemas
-│   │   │   │   ├── listing.py
-│   │   │   │   ├── cohort.py
-│   │   │   │   └── user.py
-│   │   │   ├── services/   ← Business logic
-│   │   │   │   ├── analysis_service.py
-│   │   │   │   └── alert_service.py
-│   │   │   └── db/         ← Database access
-│   │   │       ├── models.py       # SQLAlchemy ORM
-│   │   │       └── connection.py
-│   │   ├── tests/
-│   │   ├── requirements.txt
-│   │   ├── Dockerfile
-│   │   └── README.md       ← API docs
+│   │   # ── HCAD web app ─────────────────────────────────────────
+│   ├── hcad_ingest.py              ← ETL: load HCAD TSV files → DuckDB
+│   ├── hcad_scores.py              ← ZIP-level scoring (6 heat map metrics)
+│   ├── hcad_maps.py                ← Folium choropleth map generation
+│   ├── hcad_screener.py            ← Parcel deal screener (5 deal types)
+│   ├── hcad_app.py                 ← Flask application (routes + ZIP insight API)
 │   │
-│   ├── web/                ← React frontend (NEW)
-│   │   ├── src/
-│   │   │   ├── components/
-│   │   │   │   ├── Header.tsx
-│   │   │   │   ├── Dashboard.tsx
-│   │   │   │   ├── ScoreboardTable.tsx
-│   │   │   │   └── PropertyDetail.tsx
-│   │   │   ├── pages/
-│   │   │   │   ├── Home.tsx
-│   │   │   │   ├── Market.tsx
-│   │   │   │   ├── Property.tsx
-│   │   │   │   └── SavedSearches.tsx
-│   │   │   ├── services/
-│   │   │   │   └── api.ts         # API client (calls /api/*)
-│   │   │   └── App.tsx
-│   │   ├── tests/
-│   │   ├── package.json
-│   │   ├── Dockerfile
-│   │   └── README.md       ← Frontend docs
-│   │
-│   └── scheduler/          ← Job scheduler (NEW - Phase 3)
-│       ├── dags/           ← Airflow DAGs (if using Airflow)
-│       │   ├── daily_snapshots.py
-│       │   └── alerts.py
-│       ├── jobs/           ← Or simple APScheduler jobs
-│       │   ├── fetch_latest.py
-│       │   └── send_alerts.py
-│       ├── config.py
-│       ├── requirements.txt
-│       ├── Dockerfile
-│       └── README.md
+│   │   # ── HAR snapshot pipeline ──────────────────────────────────
+│   ├── extract_har.py              ← Parse HAR/JSON/JSONC files
+│   ├── normalize_har.py            ← Normalize to clean CSV tables
+│   ├── analyze_spreads.py          ← Cohort building + PPSF spread analysis
+│   ├── grid_analysis.py            ← 400m grid cell scoring
+│   ├── pipeline.py                 ← One-shot pipeline wrapper
+│   ├── visualize.py                ← Terminal artifact viewer
+│   └── fetch_searchlistings.py     ← Direct HAR.com API fetching
 │
-├── infra/                  ← Infrastructure as Code
-│   ├── docker-compose.yml  ← Local development
-│   ├── Dockerfile.base     ← Shared base image
-│   ├── kubernetes/         ← K8s manifests (Phase 3+)
-│   │   ├── data-pipeline-deployment.yaml
-│   │   ├── api-deployment.yaml
-│   │   ├── web-deployment.yaml
-│   │   ├── postgres-statefulset.yaml
-│   │   └── redis-deployment.yaml
-│   ├── terraform/          ← Cloud IaC (AWS/GCP/Azure)
-│   │   ├── main.tf
-│   │   ├── vpc.tf
-│   │   └── rds.tf
-│   └── README.md           ← Deployment guide
+├── templates/                      ← Flask HTML templates
+│   ├── hcad_dashboard.html         ← Map dashboard (6 map cards + screener CTA)
+│   └── hcad_screener.html          ← Deal screener UI
 │
-├── .github/                ← GitHub-specific
-│   ├── workflows/          ← CI/CD pipelines
-│   │   ├── test.yml        ← Run tests on PR
-│   │   ├── lint.yml        ← Code quality checks
-│   │   ├── build.yml       ← Build Docker images
-│   │   └── deploy.yml      ← Deploy to staging/prod
-│   └── ISSUE_TEMPLATE/
-│       ├── bug.md
-│       └── feature.md
+├── static/
+│   └── hcad_maps/                  ← Generated Folium HTML files
+│       ├── price_per_sqft.html
+│       ├── yoy_change.html
+│       ├── investor_activity.html
+│       ├── permit_surge.html
+│       ├── gentrification_score.html
+│       └── flip_potential.html
 │
-├── docs/                   ← Central documentation
-│   ├── README.md           ← Main docs index
-│   ├── ARCHITECTURE.md     ← System architecture
-│   ├── DEPLOYMENT.md       ← How to deploy
-│   ├── API.md              ← API reference
+├── data/
+│   ├── hcad.duckdb                 ← Analytical database (~1 GB, git-ignored)
+│   └── houston_zcta.geojson        ← Cached Houston ZIP polygons (git-ignored)
+│
+├── snapshots/                      ← HAR snapshot packs (git-ignored)
+│   └── YYYY-MM-DD_<label>/
+│       ├── raw/
+│       │   └── har/                ← Place .har or .json files here
+│       └── out/
+│           ├── extracted/          ← listings_raw.json, requests_index.csv
+│           ├── normalized/         ← active.csv, sold.csv, rentals.csv
+│           ├── qa/                 ← qa_report.json
+│           └── analysis/           ← ranked_candidates.csv, scoreboard_segments.csv, ...
+│
+├── docs/
 │   ├── guides/
-│   │   ├── setup.md        ← Getting started
-│   │   ├── contributing.md
-│   │   └── faq.md
-│   └── images/             ← Diagrams, screenshots
+│   │   ├── INSTALL.md              ← Setup, dependencies, HCAD data download
+│   │   └── USAGE.md                ← Web app + CLI reference
+│   ├── architecture/
+│   │   ├── ARCHITECTURE.md         ← System design, data models, scoring formulas
+│   │   └── MONOREPO_STRUCTURE.md   ← This file
+│   └── roadmap/
+│       └── ROADMAP.md              ← What's built, what's next
 │
-├── scripts/                ← Shared utilities
-│   ├── setup.sh            ← Development setup
-│   ├── test.sh             ← Run all tests
-│   ├── lint.sh             ← Code quality
-│   └── migrate-db.py       ← Database migrations
+├── tests/                          ← Unit tests (in progress)
 │
-├── .docker/                ← Docker build configs
-│   ├── nginx.conf          ← Reverse proxy config
-│   └── Dockerfile.prod     ← Production image
+├── .vscode/
+│   └── settings.json               ← Python interpreter path for VS Code
 │
-├── .env.example            ← Environment variables template
-├── .gitignore              ← Git ignore rules
-├── docker-compose.yml      ← Main docker-compose
-├── docker-compose.dev.yml  ← Development overrides
-├── README.md               ← Project overview
-├── CONTRIBUTING.md         ← Contribution guide
-└── LICENSE
+├── pyproject.toml                  ← Package config + CLI entry points
+├── README.md                       ← Project overview
+└── CONTRIBUTING.md
 ```
 
 ---
 
-## Service Descriptions
+## Source Module Summary
 
-### 1. Data Pipeline (`services/data-pipeline/`)
+### HCAD Pipeline
 
-**Purpose**: Raw data capture, normalization, analysis
+| Module | Responsibility |
+|--------|---------------|
+| `hcad_ingest.py` | Reads 5 HCAD TSV files, creates DuckDB tables, builds `sfr` and `sfr_enriched` views |
+| `hcad_scores.py` | Runs DuckDB aggregation queries, returns ZIP-level DataFrames for each of 6 metrics |
+| `hcad_maps.py` | Renders Folium choropleths, injects snapshot UI JavaScript, writes HTML to `static/` |
+| `hcad_screener.py` | Builds the multi-CTE scoring SQL, defines `DEAL_TYPES`, provides `screen()` and `deal_signals()` |
+| `hcad_app.py` | Flask routes, wires together ingest → scores → maps → screener, serves HAR.com ZIP insight API |
 
-**Responsibilities**:
-- Import HAR files / JSON
-- Normalize to CSV
-- Build cohorts
-- Compute spreads
-- Generate reports
+### HAR Snapshot Pipeline
 
-**Can run as**:
-- CLI tool (current use)
-- Cron job (scheduled snapshots)
-- API service (async processing)
-
-**Technology**:
-- Python 3.11+
-- pandas, numpy
-- Current codebase
-
----
-
-### 2. API Service (`services/api/`)
-
-**Purpose**: REST API for data access and analysis
-
-**Endpoints** (examples):
-```
-POST   /api/import              # Upload HAR/JSON
-GET    /api/listings/{zip}      # Get active listings
-GET    /api/comps/{mlsnum}      # Get cohort for property
-GET    /api/scoreboard          # Market metrics by ZIP
-GET    /api/opportunities       # Ranked deals
-GET    /api/health              # Service status
-POST   /api/saved-searches      # Save search criteria (Phase 3)
-GET    /api/alerts              # Get user alerts (Phase 3)
-```
-
-**Technology**:
-- FastAPI (async Python)
-- SQLAlchemy ORM
-- PostgreSQL/SQLite
-- Pydantic validation
-
-**Deployment**:
-- Docker container
-- Uvicorn ASGI server
-- Behind nginx reverse proxy
+| Module | Responsibility |
+|--------|---------------|
+| `extract_har.py` | Parses `.har`, `.json`, `.jsonc` files; extracts SearchListings payloads |
+| `normalize_har.py` | Type coercion, ZIP normalization, active/sold/rental split |
+| `analyze_spreads.py` | Cohort building, PPSF spread computation, scoreboard and ranking generation |
+| `grid_analysis.py` | Bins listings into 400m grid cells, scores cells by deal density and spread |
+| `pipeline.py` | Orchestrates extract → normalize → qa → analyze → grid as a single command |
+| `visualize.py` | Terminal table renderer for all named snapshot artifacts |
+| `fetch_searchlistings.py` | Calls `har.com/api/SearchListings` directly, writes to snapshot pack |
 
 ---
 
-### 3. Web Frontend (`services/web/`)
+## CLI Entry Points (`pyproject.toml`)
 
-**Purpose**: Interactive dashboard and UI
-
-**Pages** (examples):
-- Home → Search form
-- Dashboard → Market overview
-- Market → Scoreboard (ZIP metrics)
-- Property → Detail view with comps
-- Opportunities → Deal ranking table
-- Saved Searches → User's criteria (Phase 3)
-
-**Technology**:
-- React 18+
-- TypeScript
-- Tailwind CSS
-- Axios (API client)
-
-**Deployment**:
-- Static SPA (Single Page App)
-- Served by nginx
-- Environment-specific API base URL
-
----
-
-### 4. Job Scheduler (`services/scheduler/`)
-
-**Purpose**: Automated recurring tasks (Phase 3+)
-
-**Example jobs**:
-- Daily snapshots (fetch HAR data for watched ZIPs)
-- Analysis caching (pre-compute cohorts)
-- Alert generation (detect new deals)
-- Notifications (email/Slack)
-
-**Technology**:
-- APScheduler (simple) or Airflow (enterprise)
-- Python
-- Cron scheduling
-
-**Deployment**:
-- Docker container
-- Runs on schedule
-- Logs to central system
-
----
-
-## Development Workflow
-
-### Local Development (docker-compose)
-
-Everyone runs locally before pushing:
-
-```bash
-# 1. Clone monorepo
-git clone https://github.com/your-org/house-hunter-monorepo.git
-cd house-hunter-monorepo
-
-# 2. Start local stack
-docker-compose up
-
-# Services available:
-# - API: http://localhost:8000
-# - Web: http://localhost:3000
-# - Database: localhost:5432
-# - Redis cache: localhost:6379
 ```
+hcad-ingest    → src.hcad_ingest:main
+hcad-maps      → src.hcad_maps:main
+hcad-app       → src.hcad_app:main
+hcad-screen    → src.hcad_screener:main
 
-**docker-compose.yml**:
-```yaml
-version: '3.8'
-
-services:
-  postgres:
-    image: postgres:15
-    environment:
-      POSTGRES_PASSWORD: dev
-    ports:
-      - "5432:5432"
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-
-  redis:
-    image: redis:7
-    ports:
-      - "6379:6379"
-
-  data-pipeline:
-    build: ./services/data-pipeline
-    environment:
-      DATA_DIR: /app/data
-    volumes:
-      - ./data:/app/data
-
-  api:
-    build: ./services/api
-    environment:
-      DATABASE_URL: postgresql://postgres:dev@postgres:5432/house_hunter
-      REDIS_URL: redis://redis:6379
-    ports:
-      - "8000:8000"
-    depends_on:
-      - postgres
-      - redis
-      - data-pipeline
-
-  web:
-    build: ./services/web
-    environment:
-      REACT_APP_API_URL: http://localhost:8000/api
-    ports:
-      - "3000:3000"
-    depends_on:
-      - api
-```
-
-### Testing
-
-```bash
-# Test individual service
-cd services/api
-pytest tests/
-
-# Or test all services
-./scripts/test.sh
-```
-
-### Deployment
-
-```bash
-# 1. Push to main
-git push origin feature/xyz
-
-# 2. GitHub Actions CI runs
-# - Linting
-# - Tests
-# - Build Docker images
-# - Push to registry
-
-# 3. Deploy to staging
-# - K8s applies new manifests
-# - Smoke tests run
-# - Ready for QA
-
-# 4. Promote to production
-# - Manual approval
-# - K8s rolling update
-# - Zero downtime
+init-snapshot  → src.extract_har:init_snapshot_main
+extract-har    → src.extract_har:main
+normalize      → src.normalize_har:main
+qa             → src.normalize_har:qa_main
+analyze        → src.analyze_spreads:main
+grid-analysis  → src.grid_analysis:main
+pipeline       → src.pipeline:main
+visualize      → src.visualize:main
 ```
 
 ---
 
-## Database Schema (Planned)
+## Data Files (git-ignored)
 
-**Core tables**:
+| File | Source | Size |
+|------|--------|------|
+| `data/hcad.duckdb` | Created by `hcad-ingest` | ~1 GB |
+| `data/houston_zcta.geojson` | Fetched from OpenDataDE on first `hcad-maps` run | ~5 MB |
+| `static/hcad_maps/*.html` | Created by `hcad-maps` | ~2–5 MB each |
+| `snapshots/*/` | Created by `init-snapshot` + pipeline | Varies |
 
-```sql
--- Imported listings
-listings (
-  id, mlsnum, zip, address, proptype, beds, baths, sqft, year,
-  list_price, ppsf, dom, status, updated_at
-)
-
--- Cached analyses
-cohort_cache (
-  subject_mlsnum, cohort_json, spread, computed_at, ttl
-)
-
--- User accounts (Phase 3)
-users (
-  id, email, password_hash, created_at
-)
-
--- Saved searches (Phase 3)
-saved_searches (
-  id, user_id, name, filters_json, created_at
-)
-
--- Alerts (Phase 3)
-alerts (
-  id, user_id, search_id, deal_mlsnum, message, sent_at
-)
-
--- Historical snapshots
-snapshots (
-  id, zip, source, count_active, count_sold, created_at
-)
-```
-
----
-
-## Environment Configuration
-
-**`.env.example`** (template):
-```
-# API
-API_HOST=0.0.0.0
-API_PORT=8000
-API_DEBUG=false
-
-# Database
-DATABASE_URL=postgresql://user:pass@localhost:5432/house_hunter
-SQLALCHEMY_ECHO=false
-
-# Redis
-REDIS_URL=redis://localhost:6379/0
-
-# HAR.com (if using direct API)
-HAR_USERNAME=your_username
-HAR_PASSWORD=your_password
-
-# Email (alerts)
-SMTP_HOST=smtp.gmail.com
-SMTP_PORT=587
-SMTP_USERNAME=alerts@example.com
-SMTP_PASSWORD=your_app_password
-
-# AWS/Cloud (for file storage in Phase 3+)
-AWS_REGION=us-east-1
-S3_BUCKET=house-hunter-data
-```
-
----
-
-## Migration Path: CLI → Monorepo
-
-### Step 1: Extract data pipeline (Phase 2 start)
-- Move `src/` → `services/data-pipeline/src/`
-- Keep CLI working
-- Add tests
-
-### Step 2: Build API (Phase 2 mid)
-- Create `services/api/`
-- API wraps data pipeline
-- Both CLI and API access same normalized data
-
-### Step 3: Build web (Phase 2 end)
-- Create `services/web/`
-- React frontend calls API
-- Users can access via web instead of CLI
-
-### Step 4: Add persistence (Phase 3 start)
-- Add PostgreSQL
-- Cache cohort results
-- Track user preferences
-
-### Step 5: Add scheduler (Phase 3 mid)
-- Create `services/scheduler/`
-- Automate daily snapshots
-- Send alerts to users
-
-### Step 6: Scale & optimize (Phase 3+)
-- Add Kubernetes
-- Add monitoring/logging
-- Multi-region deployment
-
----
-
-## Key Design Decisions
-
-### ✅ Monorepo Benefits
-
-1. **Easier cross-service changes** - Single PR can update API + web
-2. **Shared CI/CD** - One test suite, one deploy pipeline
-3. **Easier local dev** - `docker-compose up` for full stack
-4. **Clear dependencies** - All code in one place
-5. **Easier team coordination** - Less repo navigation
-
-### ⚠️ Monorepo Tradeoffs
-
-- Larger repo (but manageable at this scale)
-- Can't scale services independently at start
-- Need discipline to avoid tight coupling
-
-**Mitigation**: Use clear service boundaries; avoid shared code
-
----
-
-## See Also
-
-- [ROADMAP.md](../roadmap/ROADMAP.md) - Implementation phases
-- [ARCHITECTURE.md](./ARCHITECTURE.md) - Current technical design
-- [DEPLOYMENT.md](../deployment/DEPLOYMENT.md) - Deployment guide (coming)
+HCAD source TSV files live outside this repo at `/mnt/ssd/projects/hcad-land/Real_acct_owner/` (configurable in `hcad_ingest.py`).

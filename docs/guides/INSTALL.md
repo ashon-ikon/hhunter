@@ -1,353 +1,177 @@
-# Installation & Development Setup
-
-Complete guide for setting up House Hunter for development and usage.
+# Installation Guide
 
 ## Prerequisites
 
-- **Python 3.11+** (check with `python --version`)
-- **pip** (usually included with Python)
-- **Git** (for cloning the repo)
-- **Virtual environment tool** (`venv` is built-in)
+- Python 3.11+
+- Git
+- ~3 GB free disk space (for HCAD DuckDB database)
 
-## For Users: Quick Install
+---
 
-### 1. Clone Repository
+## 1. Clone & Set Up Environment
 
 ```bash
 git clone https://github.com/your-org/house-hunter.git
 cd house-hunter
-```
 
-### 2. Create Virtual Environment
-
-```bash
 python -m venv .venv
-```
+source .venv/bin/activate        # macOS / Linux
+# .\.venv\Scripts\activate       # Windows
 
-Activate it:
-
-**macOS / Linux:**
-```bash
-source .venv/bin/activate
-```
-
-**Windows (PowerShell):**
-```powershell
-.\.venv\Scripts\Activate.ps1
-```
-
-**Windows (Command Prompt):**
-```cmd
-.\.venv\Scripts\activate.bat
-```
-
-### 3. Install Dependencies
-
-```bash
 pip install -e .
 ```
 
-This installs the package and its dependencies:
-- `pandas>=2.0` - Data manipulation
-- `python-dateutil>=2.9` - Date utilities
-- `requests>=2.31` - HTTP requests
+### Dependencies installed
 
-### 4. Verify Installation
-
-```bash
-normalize --help
-qa --help
-analyze --help
-pipeline --help
-extract-har --help
-```
-
-You should see help text for both commands.
+| Package | Purpose |
+|---------|---------|
+| `duckdb>=1.0` | In-process analytical database (powers all HCAD queries) |
+| `folium>=0.18` | Python wrapper for Leaflet.js choropleth maps |
+| `flask>=3.0` | Web application server |
+| `branca>=0.7` | Folium HTML/JS helper library |
+| `pandas>=2.0` | DataFrame processing |
+| `requests>=2.31` | HTTP client (HAR.com API, GeoJSON fetch) |
+| `python-dateutil>=2.9` | Date parsing |
 
 ---
 
-## For Developers: Full Development Setup
+## 2. HCAD Data Setup
 
-### 1. Clone & Environment Setup
+### 2.1 Download HCAD public data files
 
-```bash
-git clone https://github.com/your-org/house-hunter.git
-cd house-hunter
-python -m venv .venv
-source .venv/bin/activate  # or .\.venv\Scripts\activate on Windows
+Go to https://hcad.org/hcad-online-services/pdata and download the current year's data export. The relevant files are in the **Real Accounts (Residential)** bundle:
+
+| File | Description |
+|------|-------------|
+| `real_acct.txt` | Property valuations, sqft, year built, lot size |
+| `owners.txt` | Owner name records |
+| `deeds.txt` | Deed transfer history |
+| `permits.txt` | Building permits |
+| `real_neighborhood_code.txt` | Neighborhood codes |
+
+Place them at:
+```
+/mnt/ssd/projects/hcad-land/Real_acct_owner/
+├── real_acct.txt
+├── owners.txt
+├── deeds.txt
+├── permits.txt
+├── real_neighborhood_code.txt
+└── parcel_tieback.txt          (optional)
 ```
 
-### 2. Install Dev Dependencies
+> If you want to use a different path, edit `DB_PATH` and `HCAD_DIR` in `src/hcad_ingest.py`.
+
+### 2.2 Ingest into DuckDB
 
 ```bash
-pip install -e ".[dev]"
+hcad-ingest
 ```
 
-This adds:
-- `pytest>=8.0` - Testing framework
-- `ruff>=0.1` - Code linting & formatting
+This takes about 2 minutes and creates `data/hcad.duckdb` (~1 GB). It:
+1. Loads all five TSV files with `all_varchar=true` to prevent type inference issues
+2. Creates `sfr` view (A1/A2 state class, building > 200 sqft, valid ZIP)
+3. Creates `sfr_enriched` view (adds `yoy_pct`, `price_per_sqft`, `mkt_to_rcn_ratio`, `building_age`)
 
-### 3. Configure IDE (VS Code)
+### 2.3 Generate heat maps
 
-Create `.vscode/settings.json`:
+```bash
+hcad-maps
+```
+
+Fetches the Houston ZIP polygon GeoJSON (cached to `data/houston_zcta.geojson` after first run) and writes 6 HTML files to `static/hcad_maps/`.
+
+---
+
+## 3. Start the Web App
+
+```bash
+hcad-app
+```
+
+Open **http://localhost:5000** in your browser.
+
+The dashboard shows all 6 heat maps. Click any map to open it, click any ZIP polygon to see the detail insert card, press `S` to snapshot.
+
+---
+
+## 4. CLI Entry Points
+
+After `pip install -e .`, these commands are available:
+
+| Command | Description |
+|---------|-------------|
+| `hcad-ingest` | Load HCAD TSV files into `data/hcad.duckdb` |
+| `hcad-maps` | Regenerate all 6 HTML heat map files |
+| `hcad-app` | Start the Flask web server on port 5000 |
+| `hcad-screen` | CLI deal screener (see USAGE.md) |
+| `init-snapshot` | Create a new HAR snapshot pack |
+| `extract-har` | Extract listings from HAR/JSON files |
+| `normalize` | Normalize extracted listings |
+| `qa` | Run quality checks on a snapshot |
+| `analyze` | Run spread and cohort analysis |
+| `grid-analysis` | Grid-based scouting |
+| `pipeline` | One-shot: extract → normalize → qa → analyze → grid |
+| `visualize` | Terminal artifact viewer |
+
+---
+
+## 5. VS Code Setup
+
+`.vscode/settings.json` is already configured to use the `.venv` interpreter:
 
 ```json
 {
-  "python.defaultInterpreterPath": "${workspaceFolder}/.venv/bin/python",
-  "python.linting.enabled": true,
-  "python.linting.ruffEnabled": true,
-  "[python]": {
-    "editor.defaultFormatter": "charliermarsh.ruff",
-    "editor.formatOnSave": true,
-    "editor.codeActionsOnSave": {
-      "source.organizeImports": true
-    }
-  },
-  "files.exclude": {
-    "**/__pycache__": true,
-    "**/*.pyc": true
-  }
+  "python.defaultInterpreterPath": "${workspaceFolder}/.venv/bin/python"
 }
 ```
 
-### 4. Code Quality Checks
-
-**Lint & Format:**
-```bash
-ruff check src/ --fix
-ruff format src/
-```
-
-**Run Tests** (once tests are added):
-```bash
-pytest tests/ -v
-```
-
-### 5. Project Structure Overview
-
-```
-src/
-├── __init__.py
-├── extract_har.py
-│   └── extract_from_har()    - Extract JSON from HAR files
-│   └── copy_json_file()      - Import JSON/JSONC files
-├── normalize_har.py
-│   └── load_snapshot()       - Parse HAR JSON to DataFrames
-│   └── process_snapshot()    - Write clean CSVs
-├── analyze_spreads.py
-│   └── build_cohort()        - Filter similar properties
-│   └── subject_vs_cohort()   - Compare property to comps
-│   └── generate_scoreboard() - Market metrics by ZIP
-│   └── rank_active_by_spread()  - Rank opportunities
-└── fetch_searchlistings.py
-    └── fetch_listings()      - Direct API calls
-    └── extract_headers_from_har() - Get auth from HAR
-```
+If VS Code still picks the wrong interpreter, press `Ctrl+Shift+P` → "Python: Select Interpreter" → choose the `.venv` entry.
 
 ---
 
-## Working with Data
-
-### Getting HAR Files
-
-**Option 1: Browser Export (Recommended)**
-
-1. Open HAR.com in Firefox/Chrome
-2. Open DevTools (F12)
-3. Go to Network tab
-4. Search for properties, apply filters
-5. Right-click Network tab → Save as HAR file
-
-**Option 2: Direct API** (requires HAR file for cookies first time)
+## 6. Verify Installation
 
 ```bash
-python -m src.fetch_searchlistings --har exported.har --zip 77088
-```
+# Check DB was created
+ls -lh data/hcad.duckdb
 
-### Data Workflow
+# Quick sanity check
+python -c "
+import duckdb
+con = duckdb.connect('data/hcad.duckdb', read_only=True)
+print(con.execute('SELECT COUNT(*) FROM sfr').fetchone())
+"
+# Should print roughly (1,000,000+,)
 
-```bash
-# 1. Import raw data
-init-snapshot --label "Acres Homes 77091"
-# Place HAR exports in snapshots/<snapshot_id>/raw/har/
-extract-har --snapshot snapshots/<snapshot_id> snapshots/<snapshot_id>/raw/har
-normalize --snapshot snapshots/<snapshot_id>
-qa --snapshot snapshots/<snapshot_id>
-analyze --snapshot snapshots/<snapshot_id>
-```
-
-### Output Files
-
-After processing, check:
-
-```
-data/processed/
-├── {snapshot}_active.csv      ← Active listings (normalized)
-├── {snapshot}_sold.csv        ← Sold listings (normalized)
-├── scoreboard_zip.csv         ← Market metrics by ZIP
-├── ranked_by_spread.csv       ← Ranked opportunities
-└── cohort_{MLSNUM}.csv        ← Comparable sales for property
+# Check Flask app imports
+python -c "from src.hcad_app import app; print('OK')"
 ```
 
 ---
 
 ## Troubleshooting
 
-### "Module not found" Error
-
+### "ModuleNotFoundError: No module named 'duckdb'"
+Virtual environment is not activated or package install failed.
 ```bash
-# Make sure you're in the right directory and venv is activated
-cd /path/to/house-hunter
 source .venv/bin/activate
-pip list | grep pandas
-```
-
-### HAR File Won't Import
-
-```bash
-# Check HAR file is valid JSON
-python -c "import json; json.load(open('file.har'))"
-
-# HAR may be truncated (>1MB responses). Use fetch_searchlistings instead:
-python -m src.fetch_searchlistings --har file.har --zip 77088
-```
-
-### Slow CSV Processing
-
-Large datasets (1000+ listings) may take time:
-- `normalize_har.py`: ~5-10 seconds per 1000 records
-- `analyze_spreads.py`: ~30-60 seconds for --rank on full dataset
-
-This is expected. For performance improvements, see [ROADMAP.md](../roadmap/ROADMAP.md).
-
-### "Permission Denied" on Linux/Mac
-
-```bash
-# Make scripts executable
-chmod +x .venv/bin/activate
-chmod +x src/*.py
-```
-
----
-
-## Advanced Setup
-
-### Installing from Different Locations
-
-**From a fork:**
-```bash
-git clone https://github.com/your-fork/house-hunter.git
-cd house-hunter
 pip install -e .
 ```
 
-**For editing & contributing:**
+### "FileNotFoundError: real_acct.txt"
+HCAD files are not in the expected path. Check `HCAD_DIR` in `src/hcad_ingest.py` and update to match your actual download location.
+
+### "BinderException: trim(DOUBLE)" during ingest
+Old DuckDB version. Update:
 ```bash
-# Install in editable mode (changes to src/ are reflected immediately)
-pip install -e ".[dev]"
+pip install --upgrade duckdb
 ```
+The ingest code uses `all_varchar=true` on all `read_csv()` calls to prevent this.
 
-### Using in a Jupyter Notebook
-
-```python
-import sys
-sys.path.insert(0, '/path/to/house-hunter')
-
-from src.normalize_har import load_snapshot, to_numeric
-from src.analyze_spreads import load_latest_csvs, build_cohort
-from pathlib import Path
-
-# Now you can use functions directly
-active, sold = load_latest_csvs()
-```
-
-### CI/CD (GitHub Actions)
-
-Example `.github/workflows/test.yml` (coming):
-
-```yaml
-name: Tests
-
-on: [push, pull_request]
-
-jobs:
-  test:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v2
-      - uses: actions/setup-python@v2
-        with:
-          python-version: "3.11"
-      - run: pip install -e ".[dev]"
-      - run: ruff check src/
-      - run: pytest tests/
-```
-
----
-
-## Docker (For Hosted Service)
-
-**Dockerfile** (planned for Phase 2):
-
-```dockerfile
-FROM python:3.11-slim
-
-WORKDIR /app
-COPY . .
-
-RUN pip install -e .
-
-CMD ["python", "-m", "src.analyze_spreads", "--help"]
-```
-
-Build & run:
+### Flask port already in use
 ```bash
-docker build -t house-hunter .
-docker run house-hunter python -m src.fetch_searchlistings --help
+# Kill whatever is on port 5000
+lsof -i :5000 | awk 'NR>1 {print $2}' | xargs kill -9
+hcad-app
 ```
-
----
-
-## Next Steps
-
-- Read [docs/guides/USAGE.md](./USAGE.md) for detailed command reference
-- Read [docs/architecture/ARCHITECTURE.md](../architecture/ARCHITECTURE.md) for internal design
-- Check [docs/roadmap/ROADMAP.md](../roadmap/ROADMAP.md) for what's coming next
-- See [CONTRIBUTING.md](../../CONTRIBUTING.md) if you want to contribute
-
----
-
-## Environment Variables (For Future Use)
-
-Not currently needed, but will support:
-
-```bash
-# HAR.COM authentication (future MLS integration)
-export HAR_USERNAME="your_username"
-export HAR_PASSWORD="your_password"
-
-# AWS/cloud storage (future data warehouse)
-export AWS_REGION="us-east-1"
-export DATA_BUCKET="house-hunter-data"
-
-# API service configuration (Phase 2)
-export API_PORT=8000
-export API_DEBUG=false
-```
-
----
-
-## Uninstalling
-
-To remove House Hunter:
-
-```bash
-deactivate  # Exit virtual environment
-rm -rf house-hunter/  # Delete folder
-# Or keep .venv for other projects:
-rm -rf house-hunter/{src,data,docs}
-```
-
----
-
-**Having issues?** See [README.md#-resources](../../README.md#-resources) or open an issue on GitHub.
