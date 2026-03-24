@@ -212,7 +212,7 @@ def pick_columns(df: pd.DataFrame, artifact: str, columns_arg: str | None, all_c
 
 def table_lines(df: pd.DataFrame, title: str, limit: int, width: int | None = None) -> list[str]:
     limit = max(limit, 1)
-    term_width = width or shutil.get_terminal_size((140, 40)).columns
+    term_width = width
     work = df.head(limit).copy()
     if work.empty:
         return [title, "(no rows)"]
@@ -229,12 +229,13 @@ def table_lines(df: pd.DataFrame, title: str, limit: int, width: int | None = No
 
     min_width = 8
     total_width = sum(widths.values()) + (3 * (len(headers) - 1))
-    while total_width > term_width and any(value > min_width for value in widths.values()):
-        widest = max(widths, key=widths.get)
-        if widths[widest] <= min_width:
-            break
-        widths[widest] -= 1
-        total_width = sum(widths.values()) + (3 * (len(headers) - 1))
+    if term_width is not None:
+        while total_width > term_width and any(value > min_width for value in widths.values()):
+            widest = max(widths, key=widths.get)
+            if widths[widest] <= min_width:
+                break
+            widths[widest] -= 1
+            total_width = sum(widths.values()) + (3 * (len(headers) - 1))
 
     def trim(text: str, max_width: int) -> str:
         return shorten(text, width=max_width, placeholder="...") if len(text) > max_width else text
@@ -359,6 +360,10 @@ def main() -> None:
     if args.path and (args.artifact or args.all):
         raise SystemExit("Use either --path or named artifacts (--artifact / --all), not both.")
 
+    render_width = args.width
+    if render_width is None and sys.stdout.isatty():
+        render_width = shutil.get_terminal_size((140, 40)).columns
+
     snapshot = find_snapshot(args.snapshot) if not args.path else Path(".")
     targets = resolve_artifacts(snapshot, args.artifact, args.path, args.all)
 
@@ -371,10 +376,10 @@ def main() -> None:
                 limit=args.limit,
                 columns_arg=args.columns,
                 all_columns=args.all_columns,
-                width=args.width,
+                width=render_width,
             )
         elif path.suffix.lower() == ".json":
-            output = render_json(path=path, artifact=artifact, width=args.width)
+            output = render_json(path=path, artifact=artifact, width=render_width)
         else:
             raise SystemExit(f"Unsupported artifact type: {path.suffix}")
         outputs.append(output)
